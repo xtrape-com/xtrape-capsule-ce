@@ -1,0 +1,284 @@
+// Opstage CE v0.1 Prisma schema draft
+// This schema is the baseline persistence contract for the CE governance loop.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+// SQLite does not use native enum columns in this baseline.
+// Enum-like values are stored as String and constrained in application validation / OpenAPI.
+
+model Workspace {
+  id        String          @id
+  code      String          @unique
+  name      String
+  status    String   @default("ACTIVE")
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+
+  users              User[]
+  agents             Agent[]
+  registrationTokens RegistrationToken[]
+  capsuleServices    CapsuleService[]
+  commands           Command[]
+  auditEvents        AuditEvent[]
+  systemSettings     SystemSetting[]
+}
+
+model User {
+  id           String     @id
+  workspaceId String
+  username     String     @unique
+  passwordHash String
+  displayName  String?
+  role         String     @default("owner")
+  status       String     @default("ACTIVE")
+  lastLoginAt  DateTime?
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id])
+  commands  Command[]
+
+  @@index([workspaceId])
+}
+
+model RegistrationToken {
+  id          String                  @id
+  workspaceId String
+  name        String
+  tokenHash   String                  @unique
+  status      String                  @default("ACTIVE")
+  agentId     String?
+  expiresAt   DateTime?
+  usedAt      DateTime?
+  revokedAt   DateTime?
+  createdAt   DateTime                @default(now())
+  updatedAt   DateTime                @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id])
+  agent     Agent?    @relation(fields: [agentId], references: [id])
+
+  @@index([workspaceId, status])
+  @@index([agentId])
+}
+
+model Agent {
+  id              String      @id
+  workspaceId     String
+  code            String
+  name            String?
+  mode            String      @default("embedded")
+  runtime         String?
+  status          String      @default("PENDING")
+  lastHeartbeatAt DateTime?
+  disabledAt      DateTime?
+  revokedAt       DateTime?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  workspace          Workspace           @relation(fields: [workspaceId], references: [id])
+  tokens             AgentToken[]
+  registrationTokens RegistrationToken[]
+  capsuleServices    CapsuleService[]
+  healthReports      HealthReport[]
+  commands           Command[]
+  commandResults     CommandResult[]
+
+  @@unique([workspaceId, code])
+  @@index([workspaceId, status])
+}
+
+model AgentToken {
+  id         String    @id
+  agentId    String
+  tokenHash  String    @unique
+  name       String?
+  status     String    @default("ACTIVE")
+  lastUsedAt DateTime?
+  revokedAt  DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  agent Agent @relation(fields: [agentId], references: [id])
+
+  @@index([agentId, status])
+}
+
+model CapsuleService {
+  id             String               @id
+  workspaceId    String
+  agentId        String
+  code           String
+  name           String
+  description    String?
+  version        String?
+  runtime        String?
+  status         String               @default("UNKNOWN")
+  healthStatus   String               @default("UNKNOWN")
+  manifestJson   String
+  lastReportedAt DateTime?
+  lastHealthAt   DateTime?
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+
+  workspace     Workspace          @relation(fields: [workspaceId], references: [id])
+  agent         Agent              @relation(fields: [agentId], references: [id])
+  healthReports HealthReport[]
+  configItems   ConfigItem[]
+  actions       ActionDefinition[]
+  commands      Command[]
+
+  @@unique([workspaceId, code])
+  @@index([workspaceId, status])
+  @@index([agentId])
+}
+
+model HealthReport {
+  id          String       @id
+  workspaceId String
+  serviceId   String
+  agentId     String
+  status      String
+  message     String?
+  detailsJson String?
+  reportedAt  DateTime     @default(now())
+  createdAt   DateTime     @default(now())
+
+  service CapsuleService @relation(fields: [serviceId], references: [id])
+  agent   Agent          @relation(fields: [agentId], references: [id])
+
+  @@index([serviceId, reportedAt])
+  @@index([agentId, reportedAt])
+  @@index([workspaceId])
+}
+
+model ConfigItem {
+  id           String   @id
+  workspaceId  String
+  serviceId    String
+  configKey    String
+  label        String?
+  type         String
+  source       String?
+  editable     Boolean  @default(false)
+  sensitive    Boolean  @default(false)
+  valuePreview String?
+  defaultValue String?
+  secretRef    String?
+  metadataJson String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  service CapsuleService @relation(fields: [serviceId], references: [id])
+
+  @@unique([serviceId, configKey])
+  @@index([workspaceId])
+}
+
+model ActionDefinition {
+  id                   String      @id
+  workspaceId          String
+  serviceId            String
+  name                 String
+  label                String
+  description          String?
+  dangerLevel          String      @default("LOW")
+  requiresConfirmation Boolean     @default(false)
+  inputSchemaJson      String?
+  timeoutSeconds       Int?
+  enabled              Boolean     @default(true)
+  metadataJson         String?
+  createdAt            DateTime    @default(now())
+  updatedAt            DateTime    @updatedAt
+
+  service CapsuleService @relation(fields: [serviceId], references: [id])
+
+  @@unique([serviceId, name])
+  @@index([workspaceId])
+}
+
+model Command {
+  id              String        @id
+  workspaceId     String
+  agentId         String
+  serviceId       String
+  type            String        @default("ACTION")
+  actionName      String
+  status          String        @default("PENDING")
+  payloadJson     String?
+  createdByUserId String?
+  errorCode       String?
+  errorMessage    String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  startedAt       DateTime?
+  completedAt     DateTime?
+  expiresAt       DateTime?
+
+  workspace     Workspace       @relation(fields: [workspaceId], references: [id])
+  agent         Agent           @relation(fields: [agentId], references: [id])
+  service       CapsuleService  @relation(fields: [serviceId], references: [id])
+  createdByUser User?           @relation(fields: [createdByUserId], references: [id])
+  result        CommandResult?
+
+  @@index([workspaceId, status])
+  @@index([agentId, status])
+  @@index([serviceId, createdAt])
+}
+
+model CommandResult {
+  id          String   @id
+  commandId   String   @unique
+  agentId     String
+  success     Boolean
+  message     String?
+  dataJson    String?
+  errorJson   String?
+  reportedAt  DateTime @default(now())
+  createdAt   DateTime @default(now())
+
+  command Command @relation(fields: [commandId], references: [id])
+  agent   Agent   @relation(fields: [agentId], references: [id])
+
+  @@index([agentId, reportedAt])
+}
+
+model AuditEvent {
+  id          String         @id
+  workspaceId String
+  actorType   String
+  actorId     String?
+  action      String
+  targetType  String?
+  targetId    String?
+  result      String
+  message     String?
+  ipAddress   String?
+  userAgent   String?
+  metadataJson String?
+  createdAt   DateTime       @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id])
+
+  @@index([workspaceId, createdAt])
+  @@index([actorType, actorId])
+  @@index([targetType, targetId])
+}
+
+model SystemSetting {
+  id          String   @id
+  workspaceId String?
+  key         String
+  valueJson   String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace Workspace? @relation(fields: [workspaceId], references: [id])
+
+  @@unique([workspaceId, key])
+}

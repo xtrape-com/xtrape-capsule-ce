@@ -1,0 +1,28 @@
+{
+  "name": "@xtrape/capsule-db",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --dts",
+    "db:validate": "DATABASE_URL=file:./opstage.db prisma validate --schema schema.prisma",
+    "db:generate": "DATABASE_URL=file:./opstage.db prisma generate --schema schema.prisma",
+    "lint": "echo db lint placeholder",
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@prisma/adapter-better-sqlite3": "^7.8.0",
+    "@prisma/client": "^7.8.0",
+    "better-sqlite3": "^12.6.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
+    "prisma": "^7.8.0",
+    "tsup": "^8.3.5",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.9"
+  }
+}

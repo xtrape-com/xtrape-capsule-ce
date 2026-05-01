@@ -1,0 +1,34 @@
+{
+  "name": "xtrape-capsule-ce",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Opstage CE \u2014 a lightweight, self-hosted, open-source control plane for Capsule Services.",
+  "type": "module",
+  "scripts": {
+    "dev": "pnpm --parallel --filter @xtrape/opstage-backend --filter @xtrape/opstage-ui dev",
+    "dev:backend": "pnpm --filter @xtrape/opstage-backend dev",
+    "dev:ui": "pnpm --filter @xtrape/opstage-ui dev",
+    "build": "pnpm -r build",
+    "test": "pnpm build && pnpm -r test",
+    "lint": "pnpm -r lint",
+    "typecheck": "pnpm -r typecheck",
+    "contracts:check": "pnpm --filter @xtrape/capsule-contracts check",
+    "db:validate": "pnpm --filter @xtrape/capsule-db db:validate",
+    "db:generate": "pnpm --filter @xtrape/capsule-db db:generate",
+    "smoke:demo": "pnpm build && node --import tsx scripts/smoke-demo.mjs",
+    "test:docker-smoke": "node scripts/docker-smoke.mjs",
+    "release:check": "node scripts/release-check.mjs",
+    "release:notes": "node -e \"const fs=require('fs'); const v=fs.readFileSync('VERSION','utf8').trim(); const text=fs.readFileSync('CHANGELOG.md','utf8'); const start=text.indexOf('## ['+v+']'); const end=text.indexOf('\\n## [', start+1); console.log(text.slice(start, end>0?end:text.length).trim())\"",
+    "repo:check": "node scripts/repo-check.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.6.3",
+    "tsx": "^4.19.2"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@9.15.0",
+  "license": "Apache-2.0"
+}

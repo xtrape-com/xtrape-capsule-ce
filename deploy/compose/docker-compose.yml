@@ -1,0 +1,30 @@
+services:
+  opstage-ce:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+    image: xtrape/opstage-ce:local
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - opstage-data:/app/data
+    env_file:
+      - path: ../../.env
+        required: false
+    environment:
+      NODE_ENV: production
+      OPSTAGE_HOST: 0.0.0.0
+      OPSTAGE_PORT: 8080
+      DATABASE_URL: file:/app/data/opstage.db
+      OPSTAGE_STATIC_DIR: /app/apps/opstage-ui/dist
+      OPSTAGE_BACKUP_DIR: /app/data/backups
+    healthcheck:
+      test: ["CMD", "node", "scripts/healthcheck.mjs"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  opstage-data:
