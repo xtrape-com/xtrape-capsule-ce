@@ -14,7 +14,7 @@
   },
   "dependencies": {
     "@fastify/cookie": "^11.0.2",
-    "@xtrape/capsule-contracts": "workspace:*",
+    "@xtrape/capsule-contracts-node": "^0.1.0",
     "@xtrape/capsule-db": "workspace:*",
     "@xtrape/capsule-shared": "workspace:*",
     "bcryptjs": "^2.4.3",

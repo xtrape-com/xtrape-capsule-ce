@@ -45,7 +45,7 @@ async function main() {
     const registrationToken = tokenRes.json().data.token;
 
     const tokenFile = join(tempDir, "agent-token.json");
-    const { CapsuleAgent } = await import("../packages/agent-node/dist/index.js");
+    const { CapsuleAgent } = await import("@xtrape/capsule-agent-node");
     const agent = new CapsuleAgent({
       backendUrl,
       registrationToken,

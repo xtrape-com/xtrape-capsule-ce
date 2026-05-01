@@ -2,7 +2,7 @@ import { mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import cookie from "@fastify/cookie";
-import { adminLoginRequestSchema, agentHeartbeatRequestSchema, createActionCommandRequestSchema, createRegistrationTokenRequestSchema, createUserRequestSchema, registerAgentRequestSchema, reportCommandResultRequestSchema, resetUserPasswordRequestSchema, serviceReportRequestSchema, updateUserRequestSchema, type ReportedService } from "@xtrape/capsule-contracts";
+import { adminLoginRequestSchema, agentHeartbeatRequestSchema, createActionCommandRequestSchema, createRegistrationTokenRequestSchema, createUserRequestSchema, registerAgentRequestSchema, reportCommandResultRequestSchema, resetUserPasswordRequestSchema, serviceReportRequestSchema, updateUserRequestSchema, type ReportedService } from "@xtrape/capsule-contracts-node";
 import { DEFAULT_WORKSPACE, ensureDefaultWorkspace, openDatabase, type Db } from "@xtrape/capsule-db";
 import { createId, hashToken, newToken, redactSecrets, safeJsonStringify } from "@xtrape/capsule-shared";
 import { type AppConfig, loadConfig } from "./config.js";
@@ -396,7 +396,7 @@ function upsertReportedService(db: Db, agent: AgentRow, service: ReportedService
   }
 
   db.prepare("delete from config_items where serviceId = ?").run(serviceId);
-  for (const config of service.configs) {
+  for (const config of service.configs ?? []) {
     db.prepare(`
       insert into config_items (
         id, workspaceId, serviceId, configKey, label, type, source, editable, sensitive,
@@ -422,7 +422,7 @@ function upsertReportedService(db: Db, agent: AgentRow, service: ReportedService
   }
 
   db.prepare("delete from action_definitions where serviceId = ?").run(serviceId);
-  for (const action of service.actions) {
+  for (const action of service.actions ?? []) {
     db.prepare(`
       insert into action_definitions (
         id, workspaceId, serviceId, name, label, description, dangerLevel, requiresConfirmation,
