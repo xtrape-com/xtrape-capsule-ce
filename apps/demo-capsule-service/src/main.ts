@@ -2,8 +2,8 @@ import { CapsuleAgent } from "@xtrape/capsule-agent-node";
 
 const backendUrl = process.env.OPSTAGE_BACKEND_URL ?? "http://localhost:8080";
 const registrationToken = process.env.OPSTAGE_REGISTRATION_TOKEN;
-const tokenFile = process.env.CAPSULE_AGENT_TOKEN_FILE ?? "./data/agent-token.json";
-const autoStartLoops = process.env.CAPSULE_AGENT_AUTOSTART_LOOPS !== "false";
+const tokenFile = process.env.OPSTAGE_AGENT_TOKEN_FILE ?? "./data/agent-token.json";
+const autoStartLoops = process.env.OPSTAGE_AGENT_AUTOSTART_LOOPS !== "false";
 
 if (!registrationToken) {
   console.warn("[demo-capsule-service] OPSTAGE_REGISTRATION_TOKEN is not set. A stored Agent token must already exist or registration will fail.");

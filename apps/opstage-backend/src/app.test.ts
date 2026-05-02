@@ -127,7 +127,7 @@ describe("Phase 1 backend kernel", () => {
       cookies: { opstage_session: cookie.value }
     });
     const body = dashboard.body;
-    expect(body).toContain("AUTH_LOGIN");
+    expect(body).toContain("session.login");
     expect(body).not.toContain("wrong-password");
     await app.close();
   });
@@ -157,6 +157,7 @@ describe("Phase 2 agent registration and service report", () => {
     expect(tokenRes.statusCode).toBe(200);
     const registrationToken = tokenRes.json().data.token as string;
     expect(registrationToken).toMatch(/^opstage_reg_/);
+    expect(tokenRes.json().data.rawToken).toBe(registrationToken);
 
     const registerRes = await app.inject({
       method: "POST",
@@ -274,6 +275,15 @@ describe("Phase 2 agent registration and service report", () => {
     });
     expect(register.statusCode).toBe(401);
 
+    const deleteRevoked = await app.inject({
+      method: "DELETE",
+      url: `/api/admin/registration-tokens/${tokenId}`,
+      cookies: { opstage_session: cookie.value },
+      headers: { "x-csrf-token": csrfToken }
+    });
+    expect(deleteRevoked.statusCode).toBe(200);
+    expect(deleteRevoked.json().data.status).toBe("REVOKED");
+
     const heartbeat = await app.inject({
       method: "POST",
       url: "/api/agents/agt_missing/heartbeat",
@@ -382,8 +392,8 @@ describe("Phase 3 command and action loop", () => {
 
     const auditEvents = await app.inject({ method: "GET", url: "/api/admin/audit-events?pageSize=5", cookies: { opstage_session: cookie.value } });
     expect(auditEvents.statusCode).toBe(200);
-    expect(auditEvents.json().data.some((event: { action: string }) => event.action === "COMMAND_RESULT_REPORTED")).toBe(true);
-    const filteredAuditEvents = await app.inject({ method: "GET", url: "/api/admin/audit-events?action=COMMAND_RESULT_REPORTED&actorType=AGENT", cookies: { opstage_session: cookie.value } });
+    expect(auditEvents.json().data.some((event: { action: string }) => event.action === "command.completed" || event.action === "command.failed")).toBe(true);
+    const filteredAuditEvents = await app.inject({ method: "GET", url: "/api/admin/audit-events?action=command.completed&actorType=AGENT", cookies: { opstage_session: cookie.value } });
     expect(filteredAuditEvents.json().pagination.total).toBe(1);
     expect(JSON.stringify(auditEvents.json())).not.toContain("opstage_agent_");
     await app.close();
@@ -416,6 +426,16 @@ describe("Phase 3 command and action loop", () => {
       headers: { "x-csrf-token": csrfToken }
     });
     expect(duplicateCancel.statusCode).toBe(409);
+
+    const retry = await app.inject({
+      method: "POST",
+      url: `/api/admin/commands/${commandId}/retry`,
+      cookies: { opstage_session: cookie.value },
+      headers: { "x-csrf-token": csrfToken }
+    });
+    expect(retry.statusCode).toBe(200);
+    expect(retry.json().data).toMatchObject({ status: "PENDING", actionName: "echo" });
+    expect(retry.json().data.id).not.toBe(commandId);
     await app.close();
   });
 
@@ -512,6 +532,16 @@ describe("Phase 10 security and permissions", () => {
     const tokenRes = await app.inject({ method: "POST", url: "/api/admin/registration-tokens", cookies: { opstage_session: owner.cookie.value }, headers: { "x-csrf-token": owner.csrfToken }, payload: { name: "agent revoke" } });
     const registerRes = await app.inject({ method: "POST", url: "/api/agents/register", payload: { registrationToken: tokenRes.json().data.token, agent: { code: "revoke-agent", mode: "embedded" } } });
     const { agentId, agentToken } = registerRes.json().data as { agentId: string; agentToken: string };
+    const disable = await app.inject({ method: "POST", url: `/api/admin/agents/${agentId}/disable`, cookies: { opstage_session: owner.cookie.value }, headers: { "x-csrf-token": owner.csrfToken } });
+    expect(disable.statusCode).toBe(200);
+    expect(disable.json().data.status).toBe("DISABLED");
+    const disabledHeartbeat = await app.inject({ method: "POST", url: `/api/agents/${agentId}/heartbeat`, headers: { authorization: `Bearer ${agentToken}` }, payload: {} });
+    expect(disabledHeartbeat.statusCode).toBe(403);
+    const enable = await app.inject({ method: "POST", url: `/api/admin/agents/${agentId}/enable`, cookies: { opstage_session: owner.cookie.value }, headers: { "x-csrf-token": owner.csrfToken } });
+    expect(enable.statusCode).toBe(200);
+    expect(enable.json().data.status).toBe("ONLINE");
+    const enabledHeartbeat = await app.inject({ method: "POST", url: `/api/agents/${agentId}/heartbeat`, headers: { authorization: `Bearer ${agentToken}` }, payload: {} });
+    expect(enabledHeartbeat.statusCode).toBe(200);
     const revoke = await app.inject({ method: "POST", url: `/api/admin/agents/${agentId}/revoke`, cookies: { opstage_session: owner.cookie.value }, headers: { "x-csrf-token": owner.csrfToken } });
     expect(revoke.statusCode).toBe(200);
     expect(revoke.json().data.status).toBe("REVOKED");
@@ -525,7 +555,7 @@ describe("Phase 10 security and permissions", () => {
 describe("Phase 11 maintenance tasks", () => {
   it("expires tokens and commands, marks stale agents offline, and prunes audit events", async () => {
     const db = openDatabase({ databaseUrl: ":memory:" });
-    const app = await buildApp({ logger: false, db, config: { ...config, OPSTAGE_AGENT_STALE_SECONDS: 1, OPSTAGE_AUDIT_RETENTION_DAYS: 1, OPSTAGE_MAINTENANCE_INTERVAL_SECONDS: 0 } });
+    const app = await buildApp({ logger: false, db, config: { ...config, OPSTAGE_AGENT_OFFLINE_THRESHOLD_SECONDS: 1, OPSTAGE_AUDIT_RETENTION_DAYS: 1, OPSTAGE_MAINTENANCE_INTERVAL_SECONDS: 0 } });
     const login = await app.inject({ method: "POST", url: "/api/admin/auth/login", payload: { username: config.OPSTAGE_ADMIN_USERNAME, password: config.OPSTAGE_ADMIN_PASSWORD } });
     const cookie = login.cookies.find(item => item.name === "opstage_session")!;
     const csrfToken = login.json().data.csrfToken as string;
@@ -555,7 +585,7 @@ describe("Phase 11 maintenance tasks", () => {
     expect((db.prepare("select status from registration_tokens where id = ?").get(tokenRes.json().data.id) as { status: string }).status).toBe("EXPIRED");
     expect((db.prepare("select status from commands where id = ?").get(command.json().data.id) as { status: string }).status).toBe("EXPIRED");
     expect((db.prepare("select status from agents where id = ?").get(agentId) as { status: string }).status).toBe("OFFLINE");
-    expect((db.prepare("select status from capsule_services where id = ?").get(serviceId) as { status: string }).status).toBe("OFFLINE");
+    expect((db.prepare("select status from capsule_services where id = ?").get(serviceId) as { status: string }).status).toBe("STALE");
     await app.close();
     db.close();
   });
@@ -575,15 +605,20 @@ describe("Phase 12 export backup and diagnostics", () => {
     expect(metrics.statusCode).toBe(200);
     expect(metrics.json().data.totals.users).toBe(1);
 
+    const updateSettings = await app.inject({ method: "PATCH", url: "/api/admin/settings/maintenance", cookies: { opstage_session: cookie.value }, headers: { "x-csrf-token": csrfToken }, payload: { agentOfflineThresholdSeconds: 5, auditRetentionDays: 7, maintenanceIntervalSeconds: 0 } });
+    expect(updateSettings.statusCode).toBe(200);
+    expect(updateSettings.json().data).toMatchObject({ agentOfflineThresholdSeconds: 5, auditRetentionDays: 7, maintenanceIntervalSeconds: 0 });
+
     const diagnostics = await app.inject({ method: "GET", url: "/api/admin/diagnostics/runtime", cookies: { opstage_session: cookie.value } });
     expect(diagnostics.statusCode).toBe(200);
     expect(diagnostics.json().data.node).toMatch(/^v/);
+    expect(diagnostics.json().data.config.maintenance.auditRetentionDays).toBe(7);
     expect(JSON.stringify(diagnostics.json())).not.toContain(config.OPSTAGE_SESSION_SECRET);
 
     const csv = await app.inject({ method: "GET", url: "/api/admin/audit-events/export?format=csv", cookies: { opstage_session: cookie.value } });
     expect(csv.statusCode).toBe(200);
     expect(csv.headers["content-type"]).toContain("text/csv");
-    expect(csv.body).toContain("AUTH_LOGIN");
+    expect(csv.body).toContain("session.login");
 
     const json = await app.inject({ method: "GET", url: "/api/admin/audit-events/export", cookies: { opstage_session: cookie.value } });
     expect(json.statusCode).toBe(200);

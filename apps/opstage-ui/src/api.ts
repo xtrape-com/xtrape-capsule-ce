@@ -11,16 +11,14 @@ export interface SessionData {
   expiresAt: string;
 }
 
-let csrfToken = window.localStorage.getItem("opstage.csrf") ?? "";
+let csrfToken = "";
 
 export function setCsrfToken(token: string) {
   csrfToken = token;
-  window.localStorage.setItem("opstage.csrf", token);
 }
 
 export function clearCsrfToken() {
   csrfToken = "";
-  window.localStorage.removeItem("opstage.csrf");
 }
 
 export class ApiError extends Error {
@@ -29,7 +27,16 @@ export class ApiError extends Error {
   }
 }
 
-export async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> {
+async function refreshCsrfToken(): Promise<void> {
+  const response = await fetch("/api/admin/auth/csrf", { credentials: "include" });
+  const envelope = (await response.json().catch(() => ({}))) as ApiEnvelope<{ csrfToken: string }>;
+  if (!response.ok || envelope.success === false) {
+    throw new ApiError(response.status, envelope.error?.code ?? "REQUEST_ERROR", envelope.error?.message ?? response.statusText);
+  }
+  setCsrfToken(envelope.data.csrfToken);
+}
+
+export async function apiFetch<T>(path: string, options: RequestInit = {}, retryOnCsrf = true): Promise<T> {
   const headers = new Headers(options.headers);
   if (options.body && !headers.has("content-type")) headers.set("content-type", "application/json");
   if (!["GET", "HEAD"].includes((options.method ?? "GET").toUpperCase()) && csrfToken) {
@@ -42,6 +49,10 @@ export async function apiFetch<T>(path: string, options: RequestInit = {}): Prom
     credentials: "include"
   });
   const envelope = (await response.json().catch(() => ({}))) as ApiEnvelope<T>;
+  if (response.status === 403 && envelope.error?.code === "CSRF_INVALID" && retryOnCsrf) {
+    await refreshCsrfToken();
+    return apiFetch<T>(path, options, false);
+  }
   if (!response.ok || envelope.success === false) {
     throw new ApiError(response.status, envelope.error?.code ?? "REQUEST_ERROR", envelope.error?.message ?? response.statusText);
   }
@@ -86,6 +97,13 @@ export async function apiDownload(path: string, options: RequestInit = {}): Prom
     headers.set("x-csrf-token", csrfToken);
   }
   const response = await fetch(path, { ...options, headers, credentials: "include" });
+  if (response.status === 403) {
+    const envelope = await response.clone().json().catch(() => null) as ApiEnvelope<unknown> | null;
+    if (envelope?.error?.code === "CSRF_INVALID") {
+      await refreshCsrfToken();
+      return apiDownload(path, options);
+    }
+  }
   if (!response.ok) {
     const envelope = await response.json().catch(() => null) as ApiEnvelope<unknown> | null;
     throw new ApiError(response.status, envelope?.error?.code ?? "REQUEST_ERROR", envelope?.error?.message ?? response.statusText);

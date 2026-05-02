@@ -2,6 +2,7 @@ import { mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import cookie from "@fastify/cookie";
+import { z } from "zod";
 import { adminLoginRequestSchema, agentHeartbeatRequestSchema, createActionCommandRequestSchema, createRegistrationTokenRequestSchema, createUserRequestSchema, registerAgentRequestSchema, reportCommandResultRequestSchema, resetUserPasswordRequestSchema, serviceReportRequestSchema, updateUserRequestSchema, type ReportedService } from "@xtrape/capsule-contracts-node";
 import { DEFAULT_WORKSPACE, ensureDefaultWorkspace, openDatabase, type Db } from "@xtrape/capsule-db";
 import { createId, hashToken, newToken, redactSecrets, safeJsonStringify } from "@xtrape/capsule-shared";
@@ -155,6 +156,18 @@ interface MaintenanceResult {
   deletedAuditEvents: number;
   ranAt: string;
 }
+
+interface MaintenanceSettings {
+  agentOfflineThresholdSeconds: number;
+  auditRetentionDays: number;
+  maintenanceIntervalSeconds: number;
+}
+
+const maintenanceSettingsSchema = z.object({
+  agentOfflineThresholdSeconds: z.number().int().positive().optional(),
+  auditRetentionDays: z.number().int().min(0).optional(),
+  maintenanceIntervalSeconds: z.number().int().min(0).optional()
+});
 
 const sessions = new Map<string, Session>();
 
@@ -534,7 +547,7 @@ function collectMetrics(db: Db) {
   };
 }
 
-function runtimeDiagnostics(config: AppConfig) {
+function runtimeDiagnostics(db: Db, config: AppConfig) {
   const memory = process.memoryUsage();
   return {
     version: "0.1.0",
@@ -551,12 +564,12 @@ function runtimeDiagnostics(config: AppConfig) {
       databaseUrl: config.DATABASE_URL.replace(/([^:]{3})[^/]*@/, "$1***@"),
       staticDir: config.OPSTAGE_STATIC_DIR,
       backupDir: config.OPSTAGE_BACKUP_DIR,
-      maintenance: maintenanceSettings(config)
+      maintenance: getMaintenanceSettings(db, config)
     }
   };
 }
 
-function runMaintenance(db: Db, config: AppConfig, ts = now()): MaintenanceResult {
+function runMaintenance(db: Db, settings: MaintenanceSettings, ts = now()): MaintenanceResult {
   const expiredRegistrationTokens = db.prepare(`
     update registration_tokens
     set status = 'EXPIRED', updatedAt = ?
@@ -569,7 +582,7 @@ function runMaintenance(db: Db, config: AppConfig, ts = now()): MaintenanceResul
     where status in ('PENDING', 'RUNNING') and expiresAt is not null and expiresAt < ?
   `).run(ts, ts, ts).changes;
 
-  const staleBefore = new Date(Date.parse(ts) - config.OPSTAGE_AGENT_STALE_SECONDS * 1000).toISOString();
+  const staleBefore = new Date(Date.parse(ts) - settings.agentOfflineThresholdSeconds * 1000).toISOString();
   const offlineAgents = db.prepare(`
     update agents
     set status = 'OFFLINE', updatedAt = ?
@@ -578,20 +591,23 @@ function runMaintenance(db: Db, config: AppConfig, ts = now()): MaintenanceResul
 
   const offlineServices = db.prepare(`
     update capsule_services
-    set status = 'OFFLINE', healthStatus = 'UNKNOWN', updatedAt = ?
-    where agentId in (select id from agents where status = 'OFFLINE') and status not in ('OFFLINE')
+    set status = 'STALE', healthStatus = 'UNKNOWN', updatedAt = ?
+    where agentId in (select id from agents where status = 'OFFLINE') and status not in ('OFFLINE', 'STALE')
   `).run(ts).changes;
 
   let deletedAuditEvents = 0;
-  if (config.OPSTAGE_AUDIT_RETENTION_DAYS > 0) {
-    const auditBefore = new Date(Date.parse(ts) - config.OPSTAGE_AUDIT_RETENTION_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  if (settings.auditRetentionDays > 0) {
+    const auditBefore = new Date(Date.parse(ts) - settings.auditRetentionDays * 24 * 60 * 60 * 1000).toISOString();
     deletedAuditEvents = db.prepare("delete from audit_events where workspaceId = ? and createdAt < ?").run(DEFAULT_WORKSPACE.id, auditBefore).changes;
   }
 
+  if (offlineAgents) writeAudit(db, { actorType: "SYSTEM", action: "system.agent.offline", targetType: "Workspace", targetId: DEFAULT_WORKSPACE.id, metadata: { count: offlineAgents } });
+  if (offlineServices) writeAudit(db, { actorType: "SYSTEM", action: "system.service.stale", targetType: "Workspace", targetId: DEFAULT_WORKSPACE.id, metadata: { count: offlineServices } });
+  if (expiredCommands) writeAudit(db, { actorType: "SYSTEM", action: "system.command.expired", targetType: "Workspace", targetId: DEFAULT_WORKSPACE.id, metadata: { count: expiredCommands } });
   if (expiredRegistrationTokens || expiredCommands || offlineAgents || offlineServices || deletedAuditEvents) {
     writeAudit(db, {
       actorType: "SYSTEM",
-      action: "MAINTENANCE_RUN",
+      action: "maintenance.run",
       targetType: "Workspace",
       targetId: DEFAULT_WORKSPACE.id,
       metadata: { expiredRegistrationTokens, expiredCommands, offlineAgents, offlineServices, deletedAuditEvents }
@@ -601,12 +617,35 @@ function runMaintenance(db: Db, config: AppConfig, ts = now()): MaintenanceResul
   return { expiredRegistrationTokens, expiredCommands, offlineAgents, offlineServices, deletedAuditEvents, ranAt: ts };
 }
 
-function maintenanceSettings(config: AppConfig) {
+function defaultMaintenanceSettings(config: AppConfig): MaintenanceSettings {
   return {
-    agentStaleSeconds: config.OPSTAGE_AGENT_STALE_SECONDS,
+    agentOfflineThresholdSeconds: config.OPSTAGE_AGENT_OFFLINE_THRESHOLD_SECONDS,
     auditRetentionDays: config.OPSTAGE_AUDIT_RETENTION_DAYS,
     maintenanceIntervalSeconds: config.OPSTAGE_MAINTENANCE_INTERVAL_SECONDS
   };
+}
+
+function getMaintenanceSettings(db: Db, config: AppConfig): MaintenanceSettings {
+  const defaults = defaultMaintenanceSettings(config);
+  const row = db.prepare("select valueJson from system_settings where key = ? and (workspaceId = ? or workspaceId is null) order by workspaceId desc limit 1").get("maintenance", DEFAULT_WORKSPACE.id) as { valueJson: string } | undefined;
+  if (!row) return defaults;
+  try {
+    const parsed = maintenanceSettingsSchema.parse(jsonParse(row.valueJson));
+    return { ...defaults, ...parsed };
+  } catch {
+    return defaults;
+  }
+}
+
+function saveMaintenanceSettings(db: Db, config: AppConfig, patch: Partial<MaintenanceSettings>): MaintenanceSettings {
+  const next = { ...getMaintenanceSettings(db, config), ...patch };
+  const ts = now();
+  db.prepare(`
+    insert into system_settings (id, workspaceId, key, valueJson, createdAt, updatedAt)
+    values (?, ?, ?, ?, ?, ?)
+    on conflict(workspaceId, key) do update set valueJson = excluded.valueJson, updatedAt = excluded.updatedAt
+  `).run("set_maintenance", DEFAULT_WORKSPACE.id, "maintenance", safeJsonStringify(next), ts, ts);
+  return next;
 }
 
 async function bootstrapAdmin(db: Db, config: AppConfig): Promise<void> {
@@ -636,7 +675,7 @@ async function bootstrapAdmin(db: Db, config: AppConfig): Promise<void> {
 
   writeAudit(db, {
     actorType: "SYSTEM",
-    action: "ADMIN_BOOTSTRAPPED",
+    action: "system.bootstrap.completed",
     targetType: "User",
     targetId: userId,
     result: "SUCCESS"
@@ -683,15 +722,21 @@ export async function buildApp(options: BuildAppOptions = {}) {
 
   app.register(cookie);
 
-  const maintenanceTimer = config.OPSTAGE_MAINTENANCE_INTERVAL_SECONDS > 0
-    ? setInterval(() => {
-      try { runMaintenance(db, config); } catch (error) { app.log.error(error); }
-    }, config.OPSTAGE_MAINTENANCE_INTERVAL_SECONDS * 1000)
-    : undefined;
-  maintenanceTimer?.unref?.();
+  let maintenanceTimer: NodeJS.Timeout | undefined;
+  const scheduleMaintenance = () => {
+    if (maintenanceTimer) clearTimeout(maintenanceTimer);
+    const settings = getMaintenanceSettings(db, config);
+    if (settings.maintenanceIntervalSeconds <= 0) { maintenanceTimer = undefined; return; }
+    maintenanceTimer = setTimeout(() => {
+      try { runMaintenance(db, getMaintenanceSettings(db, config)); } catch (error) { app.log.error(error); }
+      scheduleMaintenance();
+    }, settings.maintenanceIntervalSeconds * 1000);
+    maintenanceTimer.unref?.();
+  };
+  scheduleMaintenance();
 
   app.addHook("onClose", async () => {
-    if (maintenanceTimer) clearInterval(maintenanceTimer);
+    if (maintenanceTimer) clearTimeout(maintenanceTimer);
     if (!options.db) db.close();
   });
 
@@ -740,7 +785,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     if (!user || !valid) {
       writeAudit(db, {
         actorType: "USER",
-        action: "AUTH_LOGIN",
+        action: "session.login.failed",
         result: "FAILURE",
         message: "Invalid login attempt",
         ipAddress: req.ip,
@@ -763,7 +808,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     writeAudit(db, {
       actorType: "USER",
       actorId: user.id,
-      action: "AUTH_LOGIN",
+      action: "session.login.succeeded",
       result: "SUCCESS",
       ipAddress: req.ip,
       userAgent: req.headers["user-agent"] ?? null
@@ -790,7 +835,9 @@ export async function buildApp(options: BuildAppOptions = {}) {
   app.post("/api/admin/auth/logout", async (req, reply) => {
     const signedSessionId = (req.cookies as Record<string, string | undefined>).opstage_session;
     const sessionId = verifySignedSessionId(signedSessionId, sessionSecret);
-    if (sessionId) sessions.delete(sessionId);
+    let userId: string | undefined;
+    if (sessionId) { userId = sessions.get(sessionId)?.userId; sessions.delete(sessionId); }
+    if (userId) writeAudit(db, { actorType: "USER", actorId: userId, action: "session.logout", targetType: "User", targetId: userId });
     reply.clearCookie("opstage_session", { path: "/" });
     return { success: true };
   });
@@ -801,6 +848,19 @@ export async function buildApp(options: BuildAppOptions = {}) {
       success: true,
       data: {
         user: publicUser(user),
+        csrfToken: session.csrfToken,
+        expiresAt: session.expiresAt
+      }
+    };
+  });
+
+  app.get("/api/admin/auth/csrf", async (req) => {
+    const { session, user } = getSessionUser(req, db, config);
+    session.csrfToken = createCsrfToken();
+    writeAudit(db, { actorType: "USER", actorId: user.id, action: "session.csrf.refreshed", targetType: "User", targetId: user.id });
+    return {
+      success: true,
+      data: {
         csrfToken: session.csrfToken,
         expiresAt: session.expiresAt
       }
@@ -830,7 +890,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
       insert into users (id, workspaceId, username, passwordHash, displayName, role, status, createdAt, updatedAt)
       values (?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?)
     `).run(userId, DEFAULT_WORKSPACE.id, body.username, await hashPassword(body.password), body.displayName ?? null, body.role, ts, ts);
-    writeAudit(db, { actorType: "USER", actorId: user.id, action: "USER_CREATED", targetType: "User", targetId: userId, metadata: { username: body.username, role: body.role } });
+    writeAudit(db, { actorType: "USER", actorId: user.id, action: "user.created", targetType: "User", targetId: userId, metadata: { username: body.username, role: body.role } });
     const row = db.prepare("select * from users where id = ?").get(userId) as UserRow;
     return { success: true, data: publicUser(row) };
   });
@@ -854,7 +914,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
       id: target.id
     };
     db.prepare("update users set displayName = @displayName, role = @role, status = @status, updatedAt = @updatedAt where id = @id").run(next);
-    writeAudit(db, { actorType: "USER", actorId: user.id, action: "USER_UPDATED", targetType: "User", targetId: target.id, metadata: { role: next.role, status: next.status } });
+    writeAudit(db, { actorType: "USER", actorId: user.id, action: "user.updated", targetType: "User", targetId: target.id, metadata: { role: next.role, status: next.status } });
     const row = db.prepare("select * from users where id = ?").get(target.id) as UserRow;
     return { success: true, data: publicUser(row) };
   });
@@ -867,7 +927,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     if (!target) throw Object.assign(new Error("User not found."), { statusCode: 404, code: "USER_NOT_FOUND" });
     const body = resetUserPasswordRequestSchema.parse(req.body ?? {});
     db.prepare("update users set passwordHash = ?, updatedAt = ? where id = ?").run(await hashPassword(body.password), now(), target.id);
-    writeAudit(db, { actorType: "USER", actorId: user.id, action: "USER_PASSWORD_RESET", targetType: "User", targetId: target.id });
+    writeAudit(db, { actorType: "USER", actorId: user.id, action: "user.password.reset", targetType: "User", targetId: target.id });
     return { success: true, data: publicUser({ ...target, updatedAt: now() }) };
   });
 
@@ -875,14 +935,24 @@ export async function buildApp(options: BuildAppOptions = {}) {
 
   app.get("/api/admin/settings/maintenance", async (req) => {
     getSessionUser(req, db, config);
-    return { success: true, data: maintenanceSettings(config) };
+    return { success: true, data: getMaintenanceSettings(db, config) };
+  });
+
+  app.patch("/api/admin/settings/maintenance", async (req) => {
+    const { user } = getSessionUser(req, db, config);
+    requireOwner(user);
+    const body = maintenanceSettingsSchema.parse(req.body ?? {});
+    const settings = saveMaintenanceSettings(db, config, body);
+    scheduleMaintenance();
+    writeAudit(db, { actorType: "USER", actorId: user.id, action: "settings.maintenance.updated", targetType: "Workspace", targetId: DEFAULT_WORKSPACE.id, metadata: { ...settings } });
+    return { success: true, data: settings };
   });
 
   app.post("/api/admin/maintenance/run", async (req) => {
     const { user } = getSessionUser(req, db, config);
     requireOperator(user);
-    const result = runMaintenance(db, config);
-    writeAudit(db, { actorType: "USER", actorId: user.id, action: "MAINTENANCE_TRIGGERED", targetType: "Workspace", targetId: DEFAULT_WORKSPACE.id, metadata: { ...result } });
+    const result = runMaintenance(db, getMaintenanceSettings(db, config));
+    writeAudit(db, { actorType: "USER", actorId: user.id, action: "maintenance.triggered", targetType: "Workspace", targetId: DEFAULT_WORKSPACE.id, metadata: { ...result } });
     return { success: true, data: result };
   });
 
@@ -924,12 +994,12 @@ export async function buildApp(options: BuildAppOptions = {}) {
     writeAudit(db, {
       actorType: "USER",
       actorId: user.id,
-      action: "REGISTRATION_TOKEN_CREATED",
+      action: "registration_token.created",
       targetType: "RegistrationToken",
       targetId: tokenId
     });
     const row = db.prepare("select * from registration_tokens where id = ?").get(tokenId) as RegistrationTokenRow;
-    return { success: true, data: { ...publicRegistrationToken(row), token: token.raw } };
+    return { success: true, data: { ...publicRegistrationToken(row), token: token.raw, rawToken: token.raw } };
   });
 
   app.get("/api/admin/registration-tokens", async (req) => {
@@ -949,12 +1019,26 @@ export async function buildApp(options: BuildAppOptions = {}) {
     writeAudit(db, {
       actorType: "USER",
       actorId: user.id,
-      action: "REGISTRATION_TOKEN_REVOKED",
+      action: "registration_token.revoked",
       targetType: "RegistrationToken",
       targetId: tokenId
     });
     const row = db.prepare("select * from registration_tokens where id = ?").get(tokenId) as RegistrationTokenRow | undefined;
     if (!row) throw Object.assign(new Error("Registration token not found."), { statusCode: 404, code: "REGISTRATION_TOKEN_NOT_FOUND" });
+    return { success: true, data: publicRegistrationToken(row) };
+  });
+
+  app.delete("/api/admin/registration-tokens/:tokenId", async (req) => {
+    const { user } = getSessionUser(req, db, config);
+    requireOperator(user);
+    const tokenId = (req.params as { tokenId: string }).tokenId;
+    const row = db.prepare("select * from registration_tokens where id = ? and workspaceId = ?").get(tokenId, DEFAULT_WORKSPACE.id) as RegistrationTokenRow | undefined;
+    if (!row) throw Object.assign(new Error("Registration token not found."), { statusCode: 404, code: "REGISTRATION_TOKEN_NOT_FOUND" });
+    if (!["EXPIRED", "REVOKED"].includes(row.status)) {
+      throw Object.assign(new Error("Only expired or revoked registration tokens can be deleted."), { statusCode: 409, code: "REGISTRATION_TOKEN_NOT_DELETABLE" });
+    }
+    db.prepare("delete from registration_tokens where id = ?").run(tokenId);
+    writeAudit(db, { actorType: "USER", actorId: user.id, action: "registration_token.deleted", targetType: "RegistrationToken", targetId: tokenId, metadata: { name: row.name, status: row.status } });
     return { success: true, data: publicRegistrationToken(row) };
   });
 
@@ -983,7 +1067,21 @@ export async function buildApp(options: BuildAppOptions = {}) {
     if (agent.status === "REVOKED") throw Object.assign(new Error("Agent is revoked."), { statusCode: 409, code: "AGENT_REVOKED" });
     const ts = now();
     db.prepare("update agents set status = 'DISABLED', disabledAt = ?, updatedAt = ? where id = ?").run(ts, ts, agent.id);
-    writeAudit(db, { actorType: "USER", actorId: user.id, action: "AGENT_DISABLED", targetType: "Agent", targetId: agent.id });
+    writeAudit(db, { actorType: "USER", actorId: user.id, action: "agent.disabled", targetType: "Agent", targetId: agent.id });
+    const row = db.prepare("select * from agents where id = ?").get(agent.id) as AgentRow;
+    return { success: true, data: publicAgent(row) };
+  });
+
+  app.post("/api/admin/agents/:agentId/enable", async (req) => {
+    const { user } = getSessionUser(req, db, config);
+    requireOperator(user);
+    const agentId = (req.params as { agentId: string }).agentId;
+    const agent = db.prepare("select * from agents where id = ? and workspaceId = ?").get(agentId, DEFAULT_WORKSPACE.id) as AgentRow | undefined;
+    if (!agent) throw Object.assign(new Error("Agent not found."), { statusCode: 404, code: "AGENT_NOT_FOUND" });
+    if (agent.status === "REVOKED") throw Object.assign(new Error("Agent is revoked."), { statusCode: 409, code: "AGENT_REVOKED" });
+    const ts = now();
+    db.prepare("update agents set status = 'ONLINE', disabledAt = null, updatedAt = ? where id = ?").run(ts, agent.id);
+    writeAudit(db, { actorType: "USER", actorId: user.id, action: "agent.enabled", targetType: "Agent", targetId: agent.id });
     const row = db.prepare("select * from agents where id = ?").get(agent.id) as AgentRow;
     return { success: true, data: publicAgent(row) };
   });
@@ -997,7 +1095,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     const ts = now();
     db.prepare("update agents set status = 'REVOKED', revokedAt = ?, updatedAt = ? where id = ?").run(ts, ts, agent.id);
     db.prepare("update agent_tokens set status = 'REVOKED', revokedAt = ?, updatedAt = ? where agentId = ? and status = 'ACTIVE'").run(ts, ts, agent.id);
-    writeAudit(db, { actorType: "USER", actorId: user.id, action: "AGENT_REVOKED", targetType: "Agent", targetId: agent.id });
+    writeAudit(db, { actorType: "USER", actorId: user.id, action: "agent.revoked", targetType: "Agent", targetId: agent.id });
     const row = db.prepare("select * from agents where id = ?").get(agent.id) as AgentRow;
     return { success: true, data: publicAgent(row) };
   });
@@ -1071,7 +1169,8 @@ export async function buildApp(options: BuildAppOptions = {}) {
     db.prepare("update registration_tokens set status = 'USED', agentId = ?, usedAt = ?, updatedAt = ? where id = ?").run(agentId, ts, ts, registrationToken.id);
     const agent = db.prepare("select * from agents where id = ?").get(agentId) as AgentRow;
     if (body.service) upsertReportedService(db, agent, body.service);
-    writeAudit(db, { actorType: "AGENT", actorId: agentId, action: "AGENT_REGISTERED", targetType: "Agent", targetId: agentId });
+    writeAudit(db, { actorType: "AGENT", actorId: agentId, action: "registration_token.consumed", targetType: "RegistrationToken", targetId: registrationToken.id });
+    writeAudit(db, { actorType: "AGENT", actorId: agentId, action: "agent.registered", targetType: "Agent", targetId: agentId });
     return { success: true, data: { agentId, agentToken: agentToken.raw, heartbeatIntervalSeconds: 30, commandPollIntervalSeconds: 5 } };
   });
 
@@ -1095,8 +1194,11 @@ export async function buildApp(options: BuildAppOptions = {}) {
     const agentId = (req.params as { agentId: string }).agentId;
     const agent = authenticateAgent(req, db, agentId);
     const body = serviceReportRequestSchema.parse(req.body);
-    const services = body.services.map(service => publicCapsuleService(upsertReportedService(db, agent, service)));
-    writeAudit(db, { actorType: "AGENT", actorId: agentId, action: "SERVICE_REPORTED", targetType: "Agent", targetId: agentId, metadata: { serviceCount: services.length } });
+    const upserted = body.services.map(service => upsertReportedService(db, agent, service));
+    const services = upserted.map(publicCapsuleService);
+    for (const svc of upserted) {
+      writeAudit(db, { actorType: "AGENT", actorId: agentId, action: "service.reported", targetType: "CapsuleService", targetId: svc.id });
+    }
     return { success: true, data: { services } };
   });
 
@@ -1122,7 +1224,8 @@ export async function buildApp(options: BuildAppOptions = {}) {
         createdByUserId, createdAt, updatedAt, expiresAt
       ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(commandId, DEFAULT_WORKSPACE.id, service.agentId, service.id, "ACTION", action.name, "PENDING", safeJsonStringify(redactSecrets(body.payload ?? {})), user.id, ts, ts, expiresAt);
-    writeAudit(db, { actorType: "USER", actorId: user.id, action: "COMMAND_CREATED", targetType: "Command", targetId: commandId, metadata: { serviceId: service.id, actionName: action.name } });
+    writeAudit(db, { actorType: "USER", actorId: user.id, action: "service.action.requested", targetType: "CapsuleService", targetId: service.id, metadata: { actionName: action.name } });
+    writeAudit(db, { actorType: "USER", actorId: user.id, action: "command.created", targetType: "Command", targetId: commandId, metadata: { serviceId: service.id, actionName: action.name } });
     const command = db.prepare("select * from commands where id = ?").get(commandId) as CommandRow;
     return { success: true, data: publicCommand(command) };
   });
@@ -1175,11 +1278,42 @@ export async function buildApp(options: BuildAppOptions = {}) {
     }
     const ts = now();
     db.prepare("update commands set status = 'CANCELLED', completedAt = ?, updatedAt = ? where id = ?").run(ts, ts, command.id);
-    writeAudit(db, { actorType: "USER", actorId: user.id, action: "COMMAND_CANCELLED", targetType: "Command", targetId: command.id });
+    writeAudit(db, { actorType: "USER", actorId: user.id, action: "command.cancelled", targetType: "Command", targetId: command.id });
     const row = db.prepare("select * from commands where id = ?").get(command.id) as CommandRow;
     return { success: true, data: publicCommand(row) };
   });
 
+
+  app.post("/api/admin/commands/:commandId/retry", async (req) => {
+    const { user } = getSessionUser(req, db, config);
+    requireOperator(user);
+    const commandId = (req.params as { commandId: string }).commandId;
+    const command = db.prepare("select * from commands where id = ? and workspaceId = ?").get(commandId, DEFAULT_WORKSPACE.id) as CommandRow | undefined;
+    if (!command) throw Object.assign(new Error("Command not found."), { statusCode: 404, code: "COMMAND_NOT_FOUND" });
+    if (!["FAILED", "EXPIRED", "CANCELLED"].includes(command.status)) {
+      throw Object.assign(new Error("Only failed, expired, or cancelled commands can be retried."), { statusCode: 409, code: "COMMAND_NOT_RETRYABLE" });
+    }
+    const agent = db.prepare("select * from agents where id = ? and workspaceId = ?").get(command.agentId, DEFAULT_WORKSPACE.id) as AgentRow | undefined;
+    if (!agent || ["DISABLED", "REVOKED"].includes(agent.status)) {
+      throw Object.assign(new Error("Command agent is not available."), { statusCode: 409, code: "AGENT_NOT_AVAILABLE" });
+    }
+    const service = db.prepare("select * from capsule_services where id = ? and workspaceId = ?").get(command.serviceId, DEFAULT_WORKSPACE.id) as CapsuleServiceRow | undefined;
+    if (!service) throw Object.assign(new Error("Capsule Service not found."), { statusCode: 404, code: "CAPSULE_SERVICE_NOT_FOUND" });
+    const action = db.prepare("select * from action_definitions where serviceId = ? and name = ? and enabled = 1").get(command.serviceId, command.actionName) as ActionDefinitionRow | undefined;
+    if (!action) throw Object.assign(new Error("Action not found."), { statusCode: 404, code: "ACTION_NOT_FOUND" });
+    const ts = now();
+    const retryId = createId("cmd");
+    const expiresAt = action.timeoutSeconds ? new Date(Date.now() + action.timeoutSeconds * 1000).toISOString() : null;
+    db.prepare(`
+      insert into commands (
+        id, workspaceId, agentId, serviceId, type, actionName, status, payloadJson,
+        createdByUserId, createdAt, updatedAt, expiresAt
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(retryId, DEFAULT_WORKSPACE.id, command.agentId, command.serviceId, command.type, command.actionName, "PENDING", command.payloadJson, user.id, ts, ts, expiresAt);
+    writeAudit(db, { actorType: "USER", actorId: user.id, action: "command.retried", targetType: "Command", targetId: retryId, metadata: { sourceCommandId: command.id } });
+    const row = db.prepare("select * from commands where id = ?").get(retryId) as CommandRow;
+    return { success: true, data: publicCommand(row) };
+  });
 
   app.get("/api/admin/audit-events/export", async (req, reply) => {
     const { user } = getSessionUser(req, db, config);
@@ -1203,7 +1337,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
   app.get("/api/admin/diagnostics/runtime", async (req) => {
     const { user } = getSessionUser(req, db, config);
     requireOperator(user);
-    return { success: true, data: runtimeDiagnostics(config) };
+    return { success: true, data: runtimeDiagnostics(db, config) };
   });
 
   app.post("/api/admin/backup/sqlite", async (req, reply) => {
@@ -1213,7 +1347,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     const filename = `opstage-${new Date().toISOString().replace(/[:.]/g, "-")}.db`;
     const backupPath = path.resolve(config.OPSTAGE_BACKUP_DIR, filename);
     await db.backup(backupPath);
-    writeAudit(db, { actorType: "USER", actorId: user.id, action: "SQLITE_BACKUP_CREATED", targetType: "Backup", targetId: filename });
+    writeAudit(db, { actorType: "USER", actorId: user.id, action: "backup.sqlite.created", targetType: "Backup", targetId: filename });
     reply.header("content-disposition", `attachment; filename=${filename}`);
     reply.type("application/octet-stream");
     return await readFile(backupPath);
@@ -1238,6 +1372,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
       row.status = "RUNNING";
       row.startedAt = ts;
       row.updatedAt = ts;
+      writeAudit(db, { actorType: "AGENT", actorId: agentId, action: "command.dispatched", targetType: "Command", targetId: row.id });
     }
     return { success: true, data: rows.map(publicCommand) };
   });
@@ -1258,7 +1393,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
       values (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(resultId, command.id, agent.id, body.success ? 1 : 0, body.message ?? null, safeJsonStringify(redactSecrets(body.data ?? {})), safeJsonStringify(redactSecrets(body.error ?? {})), ts, ts);
     db.prepare("update commands set status = ?, completedAt = ?, updatedAt = ? where id = ?").run(body.success ? "SUCCEEDED" : "FAILED", ts, ts, command.id);
-    writeAudit(db, { actorType: "AGENT", actorId: agent.id, action: "COMMAND_RESULT_REPORTED", targetType: "Command", targetId: command.id, result: body.success ? "SUCCESS" : "FAILURE" });
+    writeAudit(db, { actorType: "AGENT", actorId: agent.id, action: body.success ? "command.completed" : "command.failed", targetType: "Command", targetId: command.id, result: body.success ? "SUCCESS" : "FAILURE" });
     const result = db.prepare("select * from command_results where id = ?").get(resultId) as CommandResultRow;
     return { success: true, data: publicCommandResult(result) };
   });

@@ -48,6 +48,10 @@ The CE console now includes the first governance UI slice:
 - dedicated paginated Audit Events API/page
 - Agents, Services, Commands, and Audit Events filter controls
 - schema-driven Action payload form with JSON override
+- built-in UI language switcher for `zh-CN` and `en-US`; the selected language is stored in browser `localStorage` under `opstage.language`
+- completed primary operator actions: user edit/enable/disable/reset password, Agent enable/disable/revoke, command cancel/retry, editable maintenance settings with dynamic scheduler reload, real server-side table pagination, confirmation prompts, and detail refresh controls
+
+### Local UI quick start
 
 For local development, run Backend and UI separately:
 
@@ -56,7 +60,23 @@ pnpm dev:backend
 pnpm dev:ui
 ```
 
+Then open the Vite UI:
+
+```text
+http://localhost:5173/
+```
+
+If `5173` is already in use, Vite prints the next available URL, for example `http://localhost:5174/`.
 Vite proxies `/api` to `http://localhost:8080`.
+
+Default bootstrap login for a fresh local database is:
+
+```text
+Username: admin@example.local
+Password: change-me-before-running
+```
+
+These values come from `.env.example` (`OPSTAGE_ADMIN_USERNAME` / `OPSTAGE_ADMIN_PASSWORD`). They are used only when the first admin user is bootstrapped into an empty database; changing the env vars later does not reset an existing admin account. For production or shared environments, change the password and `OPSTAGE_SESSION_SECRET` before first start.
 
 ## Phase 7 notes
 
@@ -94,7 +114,7 @@ pnpm dev:backend
 # create a registration token through API/UI, then:
 OPSTAGE_BACKEND_URL=http://localhost:8080 \
 OPSTAGE_REGISTRATION_TOKEN=opstage_reg_... \
-CAPSULE_AGENT_TOKEN_FILE=./data/demo-agent-token.json \
+OPSTAGE_AGENT_TOKEN_FILE=./data/demo-agent-token.json \
 pnpm --filter @xtrape/demo-capsule-service start
 ```
 
