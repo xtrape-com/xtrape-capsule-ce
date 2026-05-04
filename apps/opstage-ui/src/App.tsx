@@ -416,6 +416,9 @@ function ServiceDrawer({ service, refreshing, onClose, onRefresh, onCommandCreat
       setPayload(JSON.stringify(prepared.initialPayload ?? defaultPayloadForAction(prepared.action), null, 2));
     } catch (err) {
       message.error(err instanceof Error ? err.message : String(err));
+      setAction(null);
+      setInitialPayload(undefined);
+      setPayload("{}");
     } finally {
       setPrepareLoading(false);
     }

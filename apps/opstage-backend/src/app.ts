@@ -285,7 +285,7 @@ function publicCommand(row: CommandRow) {
   };
 }
 
-async function waitForCommandResult(db: Db, commandId: string, timeoutMs = 10_000): Promise<{ command: CommandRow; result: CommandResultRow | undefined }> {
+async function waitForCommandResult(db: Db, commandId: string, timeoutMs = 30_000): Promise<{ command: CommandRow; result: CommandResultRow | undefined }> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const command = db.prepare("select * from commands where id = ?").get(commandId) as CommandRow | undefined;
