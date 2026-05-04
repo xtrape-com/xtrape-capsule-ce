@@ -13,6 +13,7 @@ interface Action { id: string; serviceId: string; name: string; label: string; d
 interface ActionPrepare { action: Action; initialPayload: Record<string, unknown>; currentState?: Record<string, unknown> }
 interface ConfigItem { id: string; configKey: string; label?: string | null; type: string; source?: string | null; editable: number; sensitive: number; valuePreview?: string | null; defaultValue?: string | null; secretRef?: string | null }
 interface Command { id: string; agentId: string; serviceId: string; type: string; actionName: string; status: string; payload: Record<string, unknown>; errorCode?: string | null; errorMessage?: string | null; createdAt: string; updatedAt: string; startedAt?: string | null; completedAt?: string | null; result?: Record<string, unknown> | null }
+interface AccountStatus { id?: string; label?: string; emailMasked?: string; enabled?: boolean; healthy?: boolean; operationStatus?: string; operationName?: string; operationMessage?: string; cooldownRemainingMs?: number; consecutiveFailures?: number; loginVerifiedAt?: number; lastError?: string }
 interface User { id: string; username: string; displayName?: string | null; role: string; status: string; lastLoginAt?: string | null; createdAt: string; updatedAt: string }
 interface AuditEvent { id: string; actorType: string; actorId?: string | null; action: string; targetType?: string | null; targetId?: string | null; result: string; message?: string | null; metadata: Record<string, unknown>; createdAt: string }
 interface RegistrationToken { id: string; name: string; status: string; agentId?: string | null; expiresAt?: string | null; usedAt?: string | null; revokedAt?: string | null; createdAt: string; token?: string; rawToken?: string }
@@ -348,6 +349,7 @@ interface SchemaProperty {
   enum?: Array<string | number | boolean>;
   enumLabels?: string[];
   default?: unknown;
+  maxLength?: number;
 }
 
 function getSchemaProperties(action: Action | null): Record<string, SchemaProperty> {
@@ -389,7 +391,9 @@ function SchemaPayloadFields({ action, initialPayload, setPayload }: { action: A
         </Form.Item>;
       }
       return <Form.Item key={name} name={name} label={label} tooltip={property.description} rules={rules} extra={extra}>
-        {name.toLowerCase().includes("password") ? <Input.Password placeholder={String(property.default ?? "")} /> : <Input placeholder={String(property.default ?? "")} />}
+        {name.toLowerCase().includes("password")
+          ? <Input.Password placeholder={String(property.default ?? "")} maxLength={property.maxLength ?? 4096} />
+          : <Input placeholder={String(property.default ?? "")} maxLength={property.maxLength} />}
       </Form.Item>;
     })}
   </Form>;
@@ -413,6 +417,11 @@ function ServiceDrawer({ service, refreshing, onClose, onRefresh, onCommandCreat
       const created = await apiFetch<Command>(`/api/admin/capsule-services/${service.id}/actions/${action.name}`, { method: "POST", body: JSON.stringify({ payload: parsed, confirmation: action.requiresConfirmation }) });
       setCommandResult(created);
       onCommandCreated();
+      if (isLongRunningAction(action)) {
+        message.info(t("command.startedAsync"));
+        void onRefresh();
+        return;
+      }
       const finished = await waitForCommandResult(created.id);
       setCommandResult(finished);
       if (finished.status === "SUCCEEDED") message.success(t("command.completed"));
@@ -455,6 +464,16 @@ function ServiceDrawer({ service, refreshing, onClose, onRefresh, onCommandCreat
         </Space>
       </Card>
       <Card type="inner" title={t("common.configs")}><Table rowKey="id" pagination={false} dataSource={service.configs ?? []} columns={[{ title: t("common.key"), dataIndex: "configKey" }, { title: t("common.type"), dataIndex: "type" }, { title: t("common.sensitive"), dataIndex: "sensitive", render: (v) => v ? <Tag color="red">{t("common.yes")}</Tag> : <Tag>{t("common.no")}</Tag> }, { title: t("common.preview"), dataIndex: "valuePreview" }, { title: t("common.secretRef"), dataIndex: "secretRef" }]} /></Card>
+      {accountStatusesFromHealth(service.health).length > 0 && <Card type="inner" title={t("service.accountStatus")}>
+        <Table rowKey={(row) => row.id ?? row.label ?? Math.random().toString(36)} pagination={false} dataSource={accountStatusesFromHealth(service.health)} columns={[
+          { title: t("common.id"), dataIndex: "label", render: (_v, row) => row.label ?? row.id ?? "-" },
+          { title: t("common.status"), dataIndex: "healthy", render: (v) => <StatusTag value={v ? "HEALTHY" : "UNHEALTHY"} /> },
+          { title: t("service.operationStatus"), dataIndex: "operationStatus", render: (v) => <StatusTag value={String(v ?? "IDLE")} /> },
+          { title: t("common.message"), dataIndex: "operationMessage", render: (_v, row) => row.operationMessage ?? row.lastError ?? "-" },
+          { title: t("service.failures"), dataIndex: "consecutiveFailures" },
+          { title: t("service.cooldownMs"), dataIndex: "cooldownRemainingMs" }
+        ]} />
+      </Card>}
       <Card type="inner" title={t("common.health")}><JsonBlock value={service.health ?? {}} /></Card>
       <Card type="inner" title={t("common.manifest")}><JsonBlock value={service.manifest ?? {}} /></Card>
     </Space>}
@@ -485,6 +504,17 @@ async function waitForCommandResult(commandId: string): Promise<Command> {
     await new Promise((resolve) => setTimeout(resolve, 1000));
   }
   return await apiFetch<Command>(`/api/admin/commands/${commandId}`);
+}
+
+function isLongRunningAction(action: Action): boolean {
+  return Boolean((action.timeoutSeconds && action.timeoutSeconds > 60) || action.category === "session" || action.name.toLowerCase().includes("rebuild"));
+}
+
+function accountStatusesFromHealth(health: Record<string, unknown> | null | undefined): AccountStatus[] {
+  const details = health?.details;
+  if (!details || typeof details !== "object" || Array.isArray(details)) return [];
+  const accounts = (details as { accounts?: unknown }).accounts;
+  return Array.isArray(accounts) ? accounts.filter((item): item is AccountStatus => Boolean(item) && typeof item === "object") : [];
 }
 
 function Commands() {

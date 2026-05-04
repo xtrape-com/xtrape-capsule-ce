@@ -347,7 +347,7 @@ describe("Phase 3 command and action loop", () => {
       url: `/api/admin/capsule-services/${serviceId}/actions/echo`,
       cookies: { opstage_session: cookie.value },
       headers: { "x-csrf-token": csrfToken },
-      payload: { payload: { message: "hello" } }
+      payload: { payload: { message: "hello", password: "agent-secret-value" } }
     });
     expect(create.statusCode).toBe(200);
     expect(create.json().data.status).toBe("PENDING");
@@ -360,6 +360,7 @@ describe("Phase 3 command and action loop", () => {
     });
     expect(poll.statusCode).toBe(200);
     expect(poll.json().data[0]).toMatchObject({ id: commandId, status: "RUNNING", actionName: "echo" });
+    expect(poll.json().data[0].payload.password).toBe("agent-secret-value");
 
     const result = await app.inject({
       method: "POST",
@@ -377,6 +378,8 @@ describe("Phase 3 command and action loop", () => {
     });
     expect(detail.statusCode).toBe(200);
     expect(detail.json().data.status).toBe("SUCCEEDED");
+    expect(detail.json().data.payload.password).toBe("[REDACTED]");
+    expect(JSON.stringify(detail.json())).not.toContain("agent-secret-value");
     expect(detail.json().data.result.data.echoed).toBe(true);
 
     const list = await app.inject({ method: "GET", url: "/api/admin/commands", cookies: { opstage_session: cookie.value } });

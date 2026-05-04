@@ -268,7 +268,8 @@ function initialPayloadFromSchema(schema: Record<string, unknown>): Record<strin
   }));
 }
 
-function publicCommand(row: CommandRow) {
+function publicCommand(row: CommandRow, options: { redactPayload?: boolean } = {}) {
+  const payload = jsonParse(row.payloadJson);
   return {
     id: row.id,
     agentId: row.agentId,
@@ -276,7 +277,7 @@ function publicCommand(row: CommandRow) {
     type: row.type,
     actionName: row.actionName,
     status: row.status,
-    payload: jsonParse(row.payloadJson),
+    payload: options.redactPayload === false ? payload : redactSecrets(payload),
     createdByUserId: row.createdByUserId,
     errorCode: row.errorCode,
     errorMessage: row.errorMessage,
@@ -1006,7 +1007,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
         serviceCounts,
         commandCounts,
         auditEventCount: auditCount.count,
-        recentCommands: recentCommands.map(publicCommand),
+        recentCommands: recentCommands.map((command) => publicCommand(command)),
         recentAuditEvents: recentAuditEvents.map(publicAuditEvent)
       }
     };
@@ -1301,7 +1302,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
         id, workspaceId, agentId, serviceId, type, actionName, status, payloadJson,
         createdByUserId, createdAt, updatedAt, expiresAt
       ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(commandId, DEFAULT_WORKSPACE.id, service.agentId, service.id, "ACTION_EXECUTE", action.name, "PENDING", safeJsonStringify(redactSecrets(body.payload ?? {})), user.id, ts, ts, expiresAt);
+    `).run(commandId, DEFAULT_WORKSPACE.id, service.agentId, service.id, "ACTION_EXECUTE", action.name, "PENDING", safeJsonStringify(body.payload ?? {}), user.id, ts, ts, expiresAt);
     writeAudit(db, { actorType: "USER", actorId: user.id, action: "service.action.requested", targetType: "CapsuleService", targetId: service.id, metadata: { actionName: action.name } });
     writeAudit(db, { actorType: "USER", actorId: user.id, action: "command.created", targetType: "Command", targetId: commandId, metadata: { serviceId: service.id, actionName: action.name } });
     const command = db.prepare("select * from commands where id = ?").get(commandId) as CommandRow;
@@ -1320,7 +1321,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     const where = clauses.join(" and ");
     const rows = db.prepare(`select * from commands where ${where} order by createdAt desc limit ? offset ?`).all(...values, pageSize, offset) as CommandRow[];
     const total = db.prepare(`select count(*) as count from commands where ${where}`).get(...values) as { count: number };
-    return { success: true, data: rows.map(publicCommand), pagination: { page, pageSize, total: total.count } };
+    return { success: true, data: rows.map((row) => publicCommand(row)), pagination: { page, pageSize, total: total.count } };
   });
 
 
@@ -1452,7 +1453,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
       row.updatedAt = ts;
       writeAudit(db, { actorType: "AGENT", actorId: agentId, action: "command.dispatched", targetType: "Command", targetId: row.id });
     }
-    return { success: true, data: rows.map(publicCommand) };
+    return { success: true, data: rows.map((row) => publicCommand(row, { redactPayload: false })) };
   });
 
   app.post("/api/agents/:agentId/commands/:commandId/result", async (req) => {
