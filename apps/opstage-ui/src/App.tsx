@@ -9,7 +9,7 @@ import { useI18n, type Language } from "./i18n.js";
 
 interface Agent { id: string; code: string; name?: string | null; mode: string; runtime?: string | null; status: string; lastHeartbeatAt?: string | null; createdAt: string; updatedAt: string; services?: Service[] }
 interface Service { id: string; agentId: string; code: string; name: string; description?: string | null; version?: string | null; runtime?: string | null; status: string; healthStatus: string; lastReportedAt?: string | null; lastHealthAt?: string | null; createdAt: string; updatedAt: string; actions?: Action[]; configs?: ConfigItem[]; health?: Record<string, unknown> | null; manifest?: Record<string, unknown> }
-interface Action { id: string; serviceId: string; name: string; label: string; description?: string | null; dangerLevel: string; requiresConfirmation: boolean; inputSchema?: Record<string, unknown>; timeoutSeconds?: number | null; enabled: boolean }
+interface Action { id: string; serviceId: string; name: string; label: string; description?: string | null; dangerLevel: string; requiresConfirmation: boolean; category?: string; order?: number; inputSchema?: Record<string, unknown>; timeoutSeconds?: number | null; enabled: boolean }
 interface ActionPrepare { action: Action; initialPayload: Record<string, unknown>; currentState?: Record<string, unknown> }
 interface ConfigItem { id: string; configKey: string; label?: string | null; type: string; source?: string | null; editable: number; sensitive: number; valuePreview?: string | null; defaultValue?: string | null; secretRef?: string | null }
 interface Command { id: string; agentId: string; serviceId: string; type: string; actionName: string; status: string; payload: Record<string, unknown>; errorCode?: string | null; errorMessage?: string | null; createdAt: string; updatedAt: string; startedAt?: string | null; completedAt?: string | null; result?: Record<string, unknown> | null }
@@ -307,6 +307,25 @@ function Services() {
 }
 
 
+const actionCategoryOrder = ["account", "session", "runtime-config", "diagnostics", "advanced", "other"];
+
+function actionCategoryLabel(category: string, t: (key: never, vars?: Record<string, string | number>) => string) {
+  const key = `actionCategory.${category}`;
+  const translated = t(key as never);
+  return translated === key ? category : translated;
+}
+
+function groupActions(actions: Action[] | undefined) {
+  const groups = new Map<string, Action[]>();
+  for (const action of actions ?? []) {
+    const category = action.category || "other";
+    groups.set(category, [...(groups.get(category) ?? []), action]);
+  }
+  return [...groups.entries()]
+    .sort(([a], [b]) => (actionCategoryOrder.indexOf(a) === -1 ? 999 : actionCategoryOrder.indexOf(a)) - (actionCategoryOrder.indexOf(b) === -1 ? 999 : actionCategoryOrder.indexOf(b)) || a.localeCompare(b))
+    .map(([category, items]) => ({ category, actions: items.sort((a, b) => (a.order ?? 999) - (b.order ?? 999) || a.label.localeCompare(b.label)) }));
+}
+
 function defaultPayloadForAction(action: Action): Record<string, unknown> {
   const schema = action.inputSchema;
   const properties = schema?.properties;
@@ -426,7 +445,14 @@ function ServiceDrawer({ service, refreshing, onClose, onRefresh, onCommandCreat
   return <Drawer open={!!service} onClose={onClose} title={service?.name} width={860} extra={<Button disabled={!service} loading={refreshing} onClick={onRefresh}>{t("action.refresh")}</Button>}>
     {service && <Space direction="vertical" size="large" style={{ width: "100%" }}>
       <Descriptions bordered column={2} items={["code", "version", "runtime", "status", "healthStatus", "lastReportedAt", "lastHealthAt"].map((key) => ({ key, label: key, children: key.toLowerCase().includes("status") ? <StatusTag value={String((service as unknown as Record<string, unknown>)[key] ?? "")} /> : String((service as unknown as Record<string, unknown>)[key] ?? "-") }))} />
-      <Card type="inner" title={t("common.action")}><Space wrap>{(service.actions ?? []).map(a => <Button key={a.id} loading={prepareLoading && action?.id === a.id} danger={a.dangerLevel !== "LOW" || a.requiresConfirmation} onClick={() => void openAction(a)}>{a.label}</Button>)}</Space></Card>
+      <Card type="inner" title={t("common.actions")}>
+        <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+          {groupActions(service.actions).map((group) => <div key={group.category}>
+            <Typography.Text strong>{actionCategoryLabel(group.category, t)}</Typography.Text>
+            <div style={{ marginTop: 8 }}><Space wrap>{group.actions.map(a => <Button key={a.id} loading={prepareLoading && action?.id === a.id} danger={a.dangerLevel !== "LOW" || a.requiresConfirmation} onClick={() => void openAction(a)}>{a.label}</Button>)}</Space></div>
+          </div>)}
+        </Space>
+      </Card>
       <Card type="inner" title={t("common.configs")}><Table rowKey="id" pagination={false} dataSource={service.configs ?? []} columns={[{ title: t("common.key"), dataIndex: "configKey" }, { title: t("common.type"), dataIndex: "type" }, { title: t("common.sensitive"), dataIndex: "sensitive", render: (v) => v ? <Tag color="red">{t("common.yes")}</Tag> : <Tag>{t("common.no")}</Tag> }, { title: t("common.preview"), dataIndex: "valuePreview" }, { title: t("common.secretRef"), dataIndex: "secretRef" }]} /></Card>
       <Card type="inner" title={t("common.health")}><JsonBlock value={service.health ?? {}} /></Card>
       <Card type="inner" title={t("common.manifest")}><JsonBlock value={service.manifest ?? {}} /></Card>

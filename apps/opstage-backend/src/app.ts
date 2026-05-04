@@ -236,6 +236,7 @@ function publicCapsuleService(row: CapsuleServiceRow) {
 
 function publicActionDefinition(row: ActionDefinitionRow) {
   const inputSchema = jsonParse(row.inputSchemaJson);
+  const metadata = jsonParse(row.metadataJson) as { category?: string; order?: number } | null;
   return {
     id: row.id,
     serviceId: row.serviceId,
@@ -244,6 +245,8 @@ function publicActionDefinition(row: ActionDefinitionRow) {
     description: row.description,
     dangerLevel: row.dangerLevel,
     requiresConfirmation: Boolean(row.requiresConfirmation),
+    category: metadata?.category,
+    order: metadata?.order,
     inputSchema,
     timeoutSeconds: row.timeoutSeconds,
     enabled: Boolean(row.enabled),
@@ -484,7 +487,7 @@ function upsertReportedService(db: Db, agent: AgentRow, service: ReportedService
       safeJsonStringify(action.inputSchema ?? {}),
       action.timeoutSeconds ?? null,
       1,
-      safeJsonStringify({}),
+      safeJsonStringify({ category: action.category, order: action.order }),
       ts,
       ts
     );
