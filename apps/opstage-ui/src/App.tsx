@@ -346,6 +346,7 @@ interface SchemaProperty {
   title?: string;
   description?: string;
   enum?: Array<string | number | boolean>;
+  enumLabels?: string[];
   default?: unknown;
 }
 
@@ -374,7 +375,7 @@ function SchemaPayloadFields({ action, initialPayload, setPayload }: { action: A
       const rules = required.includes(name) ? [{ required: true, message: `${label} ${t("form.required")}` }] : undefined;
       if (property.enum) {
         return <Form.Item key={name} name={name} label={label} tooltip={property.description} rules={rules} extra={extra}>
-          <Select options={property.enum.map(value => ({ value: String(value), label: String(value) }))} />
+          <Select options={property.enum.map((value, index) => ({ value: String(value), label: property.enumLabels?.[index] ?? String(value) }))} />
         </Form.Item>;
       }
       if (property.type === "boolean") {
