@@ -10,6 +10,7 @@ import { useI18n, type Language } from "./i18n.js";
 interface Agent { id: string; code: string; name?: string | null; mode: string; runtime?: string | null; status: string; lastHeartbeatAt?: string | null; createdAt: string; updatedAt: string; services?: Service[] }
 interface Service { id: string; agentId: string; code: string; name: string; description?: string | null; version?: string | null; runtime?: string | null; status: string; healthStatus: string; lastReportedAt?: string | null; lastHealthAt?: string | null; createdAt: string; updatedAt: string; actions?: Action[]; configs?: ConfigItem[]; health?: Record<string, unknown> | null; manifest?: Record<string, unknown> }
 interface Action { id: string; serviceId: string; name: string; label: string; description?: string | null; dangerLevel: string; requiresConfirmation: boolean; inputSchema?: Record<string, unknown>; timeoutSeconds?: number | null; enabled: boolean }
+interface ActionPrepare { action: Action; initialPayload: Record<string, unknown>; currentState?: Record<string, unknown> }
 interface ConfigItem { id: string; configKey: string; label?: string | null; type: string; source?: string | null; editable: number; sensitive: number; valuePreview?: string | null; defaultValue?: string | null; secretRef?: string | null }
 interface Command { id: string; agentId: string; serviceId: string; type: string; actionName: string; status: string; payload: Record<string, unknown>; errorCode?: string | null; errorMessage?: string | null; createdAt: string; updatedAt: string; startedAt?: string | null; completedAt?: string | null; result?: Record<string, unknown> | null }
 interface User { id: string; username: string; displayName?: string | null; role: string; status: string; lastLoginAt?: string | null; createdAt: string; updatedAt: string }
@@ -45,7 +46,7 @@ function useQueryData<T>(loader: () => Promise<T>, deps: React.DependencyList = 
     data: query.data ?? null,
     loading: query.isLoading || query.isFetching,
     error: query.error instanceof Error ? query.error.message : query.error ? String(query.error) : null,
-    reload: () => void query.refetch()
+    reload: async () => { await query.refetch(); }
   };
 }
 
@@ -240,8 +241,21 @@ function Agents() {
   const updateFilters = (next: { q?: string; status?: string }) => { setFilters(next); setPage(defaultPage); };
   const { data, loading, reload } = useQueryData(() => apiList<Agent>(`/api/admin/agents${queryString({ ...filters, ...page })}`), [filters.q, filters.status, page.page, page.pageSize]);
   const [selected, setSelected] = React.useState<Agent | null>(null);
+  const [refreshing, setRefreshing] = React.useState(false);
   const openAgent = async (id: string) => setSelected(await apiFetch<Agent>(`/api/admin/agents/${id}`));
-  return <Card title={t("menu.agents")} extra={<Button onClick={reload}>{t("action.refresh")}</Button>}>
+  const refreshAgents = async () => {
+    setRefreshing(true);
+    try {
+      await reload();
+      if (selected) await openAgent(selected.id);
+      message.success(t("common.refreshed"));
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRefreshing(false);
+    }
+  };
+  return <Card title={t("menu.agents")} extra={<Button loading={refreshing} onClick={() => void refreshAgents()}>{t("action.refresh")}</Button>}>
     <Space style={{ marginBottom: 16 }} wrap>
       <Input.Search placeholder={t("common.searchCodeName")} allowClear onSearch={(q) => updateFilters({ ...filters, q })} style={{ width: 240 }} />
       <Select allowClear placeholder={t("common.status")} style={{ width: 160 }} onChange={(status) => updateFilters({ ...filters, status })} options={["ONLINE", "OFFLINE", "DISABLED", "REVOKED"].map(value => ({ value, label: value }))} />
@@ -250,7 +264,7 @@ function Agents() {
       { title: t("common.code"), dataIndex: "code" }, { title: t("common.name"), dataIndex: "name" }, { title: t("common.mode"), dataIndex: "mode" }, { title: t("common.runtime"), dataIndex: "runtime" }, { title: t("common.status"), dataIndex: "status", render: (v) => <StatusTag value={v} /> }, { title: "Heartbeat", dataIndex: "lastHeartbeatAt" },
       { title: t("common.operation"), render: (_, row) => row.status === "REVOKED" ? null : <Space>{row.status === "DISABLED" ? <Popconfirm title={t("confirm.enableAgent")} onConfirm={async (event) => { event?.stopPropagation(); await apiFetch(`/api/admin/agents/${row.id}/enable`, { method: "POST" }); message.success(t("user.enabled")); void reload(); }}><Button size="small" onClick={(event) => event.stopPropagation()}>{t("action.enable")}</Button></Popconfirm> : <Popconfirm title={t("confirm.disableAgent")} onConfirm={async (event) => { event?.stopPropagation(); await apiFetch(`/api/admin/agents/${row.id}/disable`, { method: "POST" }); message.success(t("user.disabled")); void reload(); }}><Button size="small" onClick={(event) => event.stopPropagation()}>{t("action.disable")}</Button></Popconfirm>}<Popconfirm title={t("confirm.revokeAgent")} onConfirm={async (event) => { event?.stopPropagation(); await apiFetch(`/api/admin/agents/${row.id}/revoke`, { method: "POST" }); message.success(t("registration.revoked")); void reload(); }}><Button danger size="small" onClick={(event) => event.stopPropagation()}>{t("action.revoke")}</Button></Popconfirm></Space> }
     ] as ColumnsType<Agent>} />
-    <Drawer open={!!selected} onClose={() => setSelected(null)} title={selected?.code} width={720} extra={<Button disabled={!selected} onClick={() => selected && void openAgent(selected.id)}>{t("action.refresh")}</Button>}>
+    <Drawer open={!!selected} onClose={() => setSelected(null)} title={selected?.code} width={720} extra={<Button disabled={!selected} loading={refreshing} onClick={() => void refreshAgents()}>{t("action.refresh")}</Button>}>
       <Descriptions bordered column={1} items={selected ? Object.entries(selected).filter(([k]) => k !== "services").map(([key, value]) => ({ key, label: key, children: String(value ?? "-") })) : []} />
       <Typography.Title level={4} style={{ marginTop: 24 }}>{t("menu.services")}</Typography.Title>
       <Table rowKey="id" dataSource={selected?.services ?? []} pagination={false} columns={[{ title: t("common.code"), dataIndex: "code" }, { title: t("common.name"), dataIndex: "name" }, { title: t("common.health"), dataIndex: "healthStatus", render: (v) => <StatusTag value={v} /> }]} />
@@ -265,8 +279,21 @@ function Services() {
   const updateFilters = (next: { q?: string; status?: string; healthStatus?: string }) => { setFilters(next); setPage(defaultPage); };
   const { data, loading, reload } = useQueryData(() => apiList<Service>(`/api/admin/capsule-services${queryString({ ...filters, ...page })}`), [filters.q, filters.status, filters.healthStatus, page.page, page.pageSize]);
   const [selected, setSelected] = React.useState<Service | null>(null);
+  const [refreshing, setRefreshing] = React.useState(false);
   const openService = async (id: string) => setSelected(await apiFetch<Service>(`/api/admin/capsule-services/${id}`));
-  return <Card title={t("service.title")} extra={<Button onClick={reload}>{t("action.refresh")}</Button>}>
+  const refreshServices = async () => {
+    setRefreshing(true);
+    try {
+      await reload();
+      if (selected) await openService(selected.id);
+      message.success(t("common.refreshed"));
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRefreshing(false);
+    }
+  };
+  return <Card title={t("service.title")} extra={<Button loading={refreshing} onClick={() => void refreshServices()}>{t("action.refresh")}</Button>}>
     <Space style={{ marginBottom: 16 }} wrap>
       <Input.Search placeholder={t("common.searchCodeName")} allowClear onSearch={(q) => updateFilters({ ...filters, q })} style={{ width: 240 }} />
       <Select allowClear placeholder={t("service.serviceStatus")} style={{ width: 160 }} onChange={(status) => updateFilters({ ...filters, status })} options={["HEALTHY", "UNHEALTHY", "UNKNOWN"].map(value => ({ value, label: value }))} />
@@ -275,7 +302,7 @@ function Services() {
     <Table rowKey="id" loading={loading} dataSource={data?.data ?? []} pagination={{ current: data?.pagination?.page ?? page.page, pageSize: data?.pagination?.pageSize ?? page.pageSize, total: data?.pagination?.total, showSizeChanger: true, onChange: (nextPage, nextPageSize) => setPage({ page: nextPage, pageSize: nextPageSize }) }} onRow={(row) => ({ onClick: () => void openService(row.id) })} columns={[
       { title: t("common.code"), dataIndex: "code" }, { title: t("common.name"), dataIndex: "name" }, { title: t("common.version"), dataIndex: "version" }, { title: t("common.status"), dataIndex: "status", render: (v) => <StatusTag value={v} /> }, { title: t("common.health"), dataIndex: "healthStatus", render: (v) => <StatusTag value={v} /> }, { title: t("service.lastReportedAt"), dataIndex: "lastReportedAt" }
     ]} />
-    <ServiceDrawer service={selected} onClose={() => setSelected(null)} onRefresh={() => selected && void openService(selected.id)} onCommandCreated={() => message.success(t("command.createdWaitAgent"))} />
+    <ServiceDrawer service={selected} refreshing={refreshing} onClose={() => setSelected(null)} onRefresh={() => void refreshServices()} onCommandCreated={() => { message.success(t("command.createdWaitAgent")); void refreshServices(); }} />
   </Card>;
 }
 
@@ -296,7 +323,7 @@ function defaultPayloadForAction(action: Action): Record<string, unknown> {
 
 
 interface SchemaProperty {
-  type?: string;
+  type?: string | string[];
   title?: string;
   description?: string;
   enum?: Array<string | number | boolean>;
@@ -309,70 +336,125 @@ function getSchemaProperties(action: Action | null): Record<string, SchemaProper
   return properties as Record<string, SchemaProperty>;
 }
 
-function SchemaPayloadFields({ action, setPayload }: { action: Action; setPayload: (payload: string) => void }) {
+function SchemaPayloadFields({ action, initialPayload, setPayload }: { action: Action; initialPayload?: Record<string, unknown>; setPayload: (payload: string) => void }) {
   const { t } = useI18n();
   const [form] = Form.useForm<Record<string, string | number | boolean | undefined>>();
   const properties = getSchemaProperties(action);
   const required = Array.isArray(action.inputSchema?.required) ? action.inputSchema.required as string[] : [];
   React.useEffect(() => {
-    const defaults = defaultPayloadForAction(action);
+    const defaults = initialPayload ?? defaultPayloadForAction(action);
     form.setFieldsValue(defaults as Record<string, string | number | boolean | undefined>);
     setPayload(JSON.stringify(defaults, null, 2));
-  }, [action, form, setPayload]);
+  }, [action, form, initialPayload, setPayload]);
   if (Object.keys(properties).length === 0) return null;
   return <Form form={form} layout="vertical" onValuesChange={(_, values) => setPayload(JSON.stringify(values, null, 2))}>
     {Object.entries(properties).map(([name, property]) => {
-      const label = property.title ?? name;
+      const typeLabel = Array.isArray(property.type) ? property.type.join(" | ") : property.type ?? "string";
+      const label = property.title && property.title !== name ? `${property.title} (${name})` : name;
+      const extra = t("service.payloadFieldMeta", { name, type: typeLabel, required: required.includes(name) ? t("form.required") : t("form.optional") });
       const rules = required.includes(name) ? [{ required: true, message: `${label} ${t("form.required")}` }] : undefined;
       if (property.enum) {
-        return <Form.Item key={name} name={name} label={label} tooltip={property.description} rules={rules}>
+        return <Form.Item key={name} name={name} label={label} tooltip={property.description} rules={rules} extra={extra}>
           <Select options={property.enum.map(value => ({ value: String(value), label: String(value) }))} />
         </Form.Item>;
       }
       if (property.type === "boolean") {
-        return <Form.Item key={name} name={name} label={label} tooltip={property.description} valuePropName="checked" rules={rules}>
+        return <Form.Item key={name} name={name} label={label} tooltip={property.description} valuePropName="checked" rules={rules} extra={extra}>
           <Switch />
         </Form.Item>;
       }
       if (property.type === "number" || property.type === "integer") {
-        return <Form.Item key={name} name={name} label={label} tooltip={property.description} rules={rules}>
+        return <Form.Item key={name} name={name} label={label} tooltip={property.description} rules={rules} extra={extra}>
           <InputNumber style={{ width: "100%" }} />
         </Form.Item>;
       }
-      return <Form.Item key={name} name={name} label={label} tooltip={property.description} rules={rules}>
-        <Input />
+      return <Form.Item key={name} name={name} label={label} tooltip={property.description} rules={rules} extra={extra}>
+        {name.toLowerCase().includes("password") ? <Input.Password placeholder={String(property.default ?? "")} /> : <Input placeholder={String(property.default ?? "")} />}
       </Form.Item>;
     })}
   </Form>;
 }
 
-function ServiceDrawer({ service, onClose, onRefresh, onCommandCreated }: { service: Service | null; onClose: () => void; onRefresh: () => void; onCommandCreated: () => void }) {
+function ServiceDrawer({ service, refreshing, onClose, onRefresh, onCommandCreated }: { service: Service | null; refreshing?: boolean; onClose: () => void; onRefresh: () => void; onCommandCreated: () => void }) {
   const { t } = useI18n();
   const [action, setAction] = React.useState<Action | null>(null);
   const [payload, setPayload] = React.useState("{}");
+  const [initialPayload, setInitialPayload] = React.useState<Record<string, unknown> | undefined>(undefined);
+  const [commandResult, setCommandResult] = React.useState<Command | null>(null);
+  const [commandRunning, setCommandRunning] = React.useState(false);
+  const [prepareLoading, setPrepareLoading] = React.useState(false);
   const submitAction = async () => {
     if (!service || !action) return;
     let parsed: Record<string, unknown> = {};
     try { parsed = JSON.parse(payload) as Record<string, unknown>; } catch { message.error(t("service.invalidPayload")); return; }
-    await apiFetch<Command>(`/api/admin/capsule-services/${service.id}/actions/${action.name}`, { method: "POST", body: JSON.stringify({ payload: parsed, confirmation: action.requiresConfirmation }) });
-    setAction(null); setPayload("{}"); onCommandCreated();
+    setCommandRunning(true);
+    setCommandResult(null);
+    try {
+      const created = await apiFetch<Command>(`/api/admin/capsule-services/${service.id}/actions/${action.name}`, { method: "POST", body: JSON.stringify({ payload: parsed, confirmation: action.requiresConfirmation }) });
+      setCommandResult(created);
+      onCommandCreated();
+      const finished = await waitForCommandResult(created.id);
+      setCommandResult(finished);
+      if (finished.status === "SUCCEEDED") message.success(t("command.completed"));
+      else message.error(finished.errorMessage ?? t("command.failed"));
+    } finally {
+      setCommandRunning(false);
+    }
   };
-  return <Drawer open={!!service} onClose={onClose} title={service?.name} width={860} extra={<Button disabled={!service} onClick={onRefresh}>{t("action.refresh")}</Button>}>
+  const openAction = async (next: Action) => {
+    setAction(next);
+    setPayload(JSON.stringify(defaultPayloadForAction(next), null, 2));
+    setCommandResult(null);
+    setCommandRunning(false);
+    setInitialPayload(undefined);
+    if (!service) return;
+    setPrepareLoading(true);
+    try {
+      const prepared = await apiFetch<ActionPrepare>(`/api/admin/capsule-services/${service.id}/actions/${next.name}`);
+      setAction(prepared.action);
+      setInitialPayload(prepared.initialPayload ?? defaultPayloadForAction(prepared.action));
+      setPayload(JSON.stringify(prepared.initialPayload ?? defaultPayloadForAction(prepared.action), null, 2));
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPrepareLoading(false);
+    }
+  };
+  return <Drawer open={!!service} onClose={onClose} title={service?.name} width={860} extra={<Button disabled={!service} loading={refreshing} onClick={onRefresh}>{t("action.refresh")}</Button>}>
     {service && <Space direction="vertical" size="large" style={{ width: "100%" }}>
       <Descriptions bordered column={2} items={["code", "version", "runtime", "status", "healthStatus", "lastReportedAt", "lastHealthAt"].map((key) => ({ key, label: key, children: key.toLowerCase().includes("status") ? <StatusTag value={String((service as unknown as Record<string, unknown>)[key] ?? "")} /> : String((service as unknown as Record<string, unknown>)[key] ?? "-") }))} />
-      <Card type="inner" title={t("common.action")}><Space wrap>{(service.actions ?? []).map(a => <Button key={a.id} danger={a.dangerLevel !== "LOW" || a.requiresConfirmation} onClick={() => { setAction(a); setPayload(JSON.stringify(defaultPayloadForAction(a), null, 2)); }}>{a.label}</Button>)}</Space></Card>
+      <Card type="inner" title={t("common.action")}><Space wrap>{(service.actions ?? []).map(a => <Button key={a.id} loading={prepareLoading && action?.id === a.id} danger={a.dangerLevel !== "LOW" || a.requiresConfirmation} onClick={() => void openAction(a)}>{a.label}</Button>)}</Space></Card>
       <Card type="inner" title={t("common.configs")}><Table rowKey="id" pagination={false} dataSource={service.configs ?? []} columns={[{ title: t("common.key"), dataIndex: "configKey" }, { title: t("common.type"), dataIndex: "type" }, { title: t("common.sensitive"), dataIndex: "sensitive", render: (v) => v ? <Tag color="red">{t("common.yes")}</Tag> : <Tag>{t("common.no")}</Tag> }, { title: t("common.preview"), dataIndex: "valuePreview" }, { title: t("common.secretRef"), dataIndex: "secretRef" }]} /></Card>
       <Card type="inner" title={t("common.health")}><JsonBlock value={service.health ?? {}} /></Card>
       <Card type="inner" title={t("common.manifest")}><JsonBlock value={service.manifest ?? {}} /></Card>
     </Space>}
-    <Modal open={!!action} title={t("service.executeAction", { label: action?.label ?? "" })} onCancel={() => setAction(null)} onOk={() => void submitAction()} okText={action?.requiresConfirmation ? t("action.confirmRun") : t("action.run")} okButtonProps={{ danger: action?.requiresConfirmation }}>
+    <Modal open={!!action} title={t("service.executeAction", { label: action?.label ?? "" })} onCancel={() => setAction(null)} onOk={() => void submitAction()} okText={action?.requiresConfirmation ? t("action.confirmRun") : t("action.run")} confirmLoading={commandRunning} okButtonProps={{ danger: action?.requiresConfirmation }}>
       <Typography.Paragraph>{action?.description}</Typography.Paragraph>
       {action?.requiresConfirmation && <Typography.Paragraph type="danger">{t("service.actionRequiresConfirmation")}</Typography.Paragraph>}
       <Typography.Text type="secondary">{t("service.autoPayloadHelp")}</Typography.Text>
-      {action && <SchemaPayloadFields action={action} setPayload={setPayload} />}
+      {action && <SchemaPayloadFields action={action} initialPayload={initialPayload} setPayload={setPayload} />}
       <Input.TextArea value={payload} onChange={(e) => setPayload(e.target.value)} rows={8} />
+      {commandResult && <Card size="small" title={`${t("command.title")} ${commandResult.id}`} style={{ marginTop: 16 }}>
+        <Descriptions size="small" bordered column={1} items={[
+          { key: "status", label: t("common.status"), children: <StatusTag value={commandResult.status} /> },
+          { key: "createdAt", label: t("command.createdAt"), children: commandResult.createdAt },
+          { key: "completedAt", label: t("command.completedAt"), children: commandResult.completedAt ?? "-" }
+        ]} />
+        <Typography.Title level={5} style={{ marginTop: 16 }}>{t("common.result")}</Typography.Title>
+        <JsonBlock value={commandResult.result ?? { errorCode: commandResult.errorCode, errorMessage: commandResult.errorMessage }} />
+      </Card>}
     </Modal>
   </Drawer>;
+}
+
+async function waitForCommandResult(commandId: string): Promise<Command> {
+  const terminal = new Set(["SUCCEEDED", "FAILED", "CANCELLED", "EXPIRED"]);
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    const command = await apiFetch<Command>(`/api/admin/commands/${commandId}`);
+    if (terminal.has(command.status)) return command;
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+  return await apiFetch<Command>(`/api/admin/commands/${commandId}`);
 }
 
 function Commands() {

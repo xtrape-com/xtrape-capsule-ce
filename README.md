@@ -1,21 +1,19 @@
 # xtrape-capsule CE
 
-Opstage CE is the first implementation target for the `xtrape-capsule` governance loop.
+Opstage CE is the Community Edition of the `xtrape-capsule` governance platform — a control plane for managing Capsule Services and their lifecycle.
 
-This repository follows the CE v0.1 plan from `xtrape-capsule-docs`:
+## Stack
 
-- Fastify Backend
-- React UI
+- Fastify + TypeScript backend
+- React 18 + Ant Design UI
 - SQLite + Prisma persistence
-- Node Embedded Agent SDK
-- Demo Capsule Service
+- Node.js Agent SDK (embedded, connects services to Opstage)
 
 ## Workspace
 
 ```text
 apps/opstage-backend
 apps/opstage-ui
-apps/demo-capsule-service
 packages/contracts
 packages/db
 packages/agent-node
@@ -23,7 +21,7 @@ packages/shared
 packages/test-utils
 ```
 
-## Phase 0 checks
+## Setup checks
 
 ```bash
 pnpm install
@@ -35,65 +33,103 @@ pnpm build
 
 ## Admin UI
 
-The CE console now includes the first governance UI slice:
+The CE console provides:
 
-- session login/logout with CSRF-aware API client
-- dashboard summary and recent audit events
-- registration token creation/revocation with one-time token display
-- agent and Capsule Service inventory drawers
-- service config/health/manifest review
-- action execution modal that creates Commands
-- command list/detail inspection
-- command auto-refresh and admin cancellation for pending/running commands
-- dedicated paginated Audit Events API/page
-- Agents, Services, Commands, and Audit Events filter controls
-- schema-driven Action payload form with JSON override
-- built-in UI language switcher for `zh-CN` and `en-US`; the selected language is stored in browser `localStorage` under `opstage.language`
-- completed primary operator actions: user edit/enable/disable/reset password, Agent enable/disable/revoke, command cancel/retry, editable maintenance settings with dynamic scheduler reload, real server-side table pagination, confirmation prompts, and detail refresh controls
+- Session login/logout with CSRF-aware API client
+- Dashboard summary and recent audit events
+- Registration token creation and revocation
+- Agent and Capsule Service inventory with detail drawers
+- Service config, health, and manifest review
+- Action execution with schema-driven payload form and JSON override
+- Command list, detail, and cancellation
+- Paginated Audit Events with filter controls
+- User management (owner/operator/viewer roles)
+- Agent lifecycle operations (enable/disable/revoke)
+- Maintenance settings with dynamic scheduler reload
+- Metrics, diagnostics, audit CSV/JSON export, and SQLite backup download
+- UI language switcher (`zh-CN` / `en-US`; stored in `localStorage` under `opstage.language`)
 
-### Local UI quick start
+## Capsule Service Action API
 
-For local development, run Backend and UI separately:
+Service report 中的 `actions` 只作为 **Action Catalog**：用于展示按钮列表和稳定说明，不承载动态表单。打开 Action 面板时，UI 通过 `GET` 创建 `ACTION_PREPARE` command，并使用 Agent 返回的动态 `inputSchema` / `initialPayload` / 当前状态渲染表单。
+
+Action 面板和 Action 执行使用同一个资源 URL，通过 HTTP method 区分语义：
+
+```text
+GET  /api/admin/capsule-services/:serviceId/actions/:actionName
+POST /api/admin/capsule-services/:serviceId/actions/:actionName
+```
+
+| Method | 语义 | 是否创建 Command | 用途 |
+|---|---|---:|---|
+| `GET` | 准备/打开 Action 面板 | 是：`ACTION_PREPARE` | 创建准备阶段 Command，由 Agent prepare handler 返回动态 action metadata、`inputSchema`、`initialPayload`、当前状态 |
+| `POST` | 执行 Action | 是：`ACTION_EXECUTE` | 根据 payload 创建执行 command，等待 Agent 拉取并执行 |
+
+`GET` 示例响应：
+
+```json
+{
+  "action": {
+    "name": "addAccount",
+    "label": "Add Account",
+    "requiresConfirmation": true,
+    "inputSchema": {
+      "type": "object",
+      "required": ["email"],
+      "properties": {
+        "email": { "type": "string", "default": "user@example.com" }
+      }
+    }
+  },
+  "initialPayload": {
+    "email": "user@example.com"
+  },
+  "currentState": {
+    "service": { "code": "capi-chatgpt", "status": "HEALTHY" },
+    "configs": []
+  },
+  "prepareCommand": {
+    "id": "cmd_prepare_001",
+    "type": "ACTION_PREPARE",
+    "status": "SUCCEEDED"
+  }
+}
+```
+
+`POST` 示例请求：
+
+```json
+{
+  "payload": {
+    "email": "user@example.com",
+    "enabled": true
+  },
+  "confirmation": true
+}
+```
+
+UI 打开 action modal 时调用 `GET`，后端创建 `ACTION_PREPARE` command 并等待 Agent prepare handler 返回动态表单和初始 JSON；用户点击 Run / Confirm run 时调用 `POST` 创建 `ACTION_EXECUTE` command，并在当前弹窗中轮询展示 command 结果。
+
+### Local development
+
+Run Backend and UI separately:
 
 ```bash
 pnpm dev:backend
 pnpm dev:ui
 ```
 
-Then open the Vite UI:
-
-```text
-http://localhost:5173/
-```
-
-If `5173` is already in use, Vite prints the next available URL, for example `http://localhost:5174/`.
+Open `http://localhost:5173/` (Vite prints the next available port if 5173 is taken).  
 Vite proxies `/api` to `http://localhost:8080`.
 
-Default bootstrap login for a fresh local database is:
+Default bootstrap credentials for a fresh local database:
 
 ```text
 Username: admin@example.local
-Password: change-me-before-running
+Password: ChangeMeBeforeRunning123!
 ```
 
-These values come from `.env.example` (`OPSTAGE_ADMIN_USERNAME` / `OPSTAGE_ADMIN_PASSWORD`). They are used only when the first admin user is bootstrapped into an empty database; changing the env vars later does not reset an existing admin account. For production or shared environments, change the password and `OPSTAGE_SESSION_SECRET` before first start.
-
-## Phase 7 notes
-
-Backend/UI now expose richer governance operations: dashboard command counts and recent commands, `/api/admin/audit-events` pagination/filtering, and `/api/admin/commands/:commandId/cancel` for terminal-safe cancellation.
-
-## Phase 8 notes
-
-The console now has first-pass operator ergonomics: server-backed filters for Agents, Services, Commands, and Audit Events; richer Command detail drawers; and schema-driven action forms generated from reported `inputSchema` definitions while keeping a JSON override path for advanced payloads.
-
-
-## Demo smoke test
-
-The smoke test starts an in-process Backend, creates a registration token, starts the demo Agent SDK flow, triggers `echo` and `runHealthCheck`, and verifies CommandResults.
-
-```bash
-pnpm smoke:demo
-```
+These come from `.env.example` (`OPSTAGE_ADMIN_USERNAME` / `OPSTAGE_ADMIN_PASSWORD`) and are used only when the first admin user is bootstrapped into an empty database. Changing the env vars later does not reset an existing account. For production, change the password and `OPSTAGE_SESSION_SECRET` before first start.
 
 ## Production / Docker deployment
 
@@ -106,46 +142,3 @@ docker compose -f deploy/compose/docker-compose.yml up --build -d
 ```
 
 Open `http://localhost:8080`. See `deploy/README.md` for operational notes, health checks, and backup guidance.
-
-## Manual demo service
-
-```bash
-pnpm dev:backend
-# create a registration token through API/UI, then:
-OPSTAGE_BACKEND_URL=http://localhost:8080 \
-OPSTAGE_REGISTRATION_TOKEN=opstage_reg_... \
-OPSTAGE_AGENT_TOKEN_FILE=./data/demo-agent-token.json \
-pnpm --filter @xtrape/demo-capsule-service start
-```
-
-## Phase 9 notes
-
-Production packaging now includes Backend-hosted static UI, a multi-stage Dockerfile, Compose deployment, container healthcheck script, `.dockerignore`, and deployment runbook.
-
-## Phase 10 notes
-
-Security model now includes owner/operator/viewer roles, owner-only user management, operator mutation gates for registration tokens and commands, Agent disable/revoke flows that invalidate active tokens, and UI controls for Users and Agent lifecycle operations.
-
-## Phase 11 notes
-
-Maintenance tasks now expire active registration tokens after `expiresAt`, expire pending/running commands after `expiresAt`, mark stale online Agents and their services offline, prune old audit events according to `OPSTAGE_AUDIT_RETENTION_DAYS`, run on a configurable interval, and can be triggered manually from Settings.
-
-## Phase 12 notes
-
-Observability and recovery now include admin metrics, runtime diagnostics, CSV/JSON audit export, owner-only SQLite backup downloads, Settings-page diagnostics, and Docker backup directory configuration.
-
-## Phase 13 notes
-
-Code quality pass extracted reusable Backend RBAC and static UI serving modules, extracted shared UI display components, and fixed duplicate public registration token fields while keeping behavior covered by the existing test suite.
-
-## Phase 14 notes
-
-Testing coverage now includes Backend RBAC unit tests, static UI resolver tests, UI shared component render tests, contract schema tests, and a Docker Compose config smoke script (`pnpm test:docker-smoke`).
-
-## Phase 15 notes
-
-Release governance is now scaffolded with `VERSION`, `CHANGELOG.md`, `LICENSE`, `NOTICE`, `RELEASE.md`, `release:check`, and `release:notes`. The release check verifies required release files, package/version alignment, changelog entry, Apache-2.0 metadata, environment placeholders, and Docker Compose config.
-
-## Phase 16 notes
-
-Final repository readiness now includes `ACCEPTANCE.md`, a `repo:check` script, release/acceptance verification, ignored generated artifacts, and a suggested commit message for v0.1.0.

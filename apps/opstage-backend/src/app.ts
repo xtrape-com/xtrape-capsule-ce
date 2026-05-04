@@ -235,6 +235,7 @@ function publicCapsuleService(row: CapsuleServiceRow) {
 }
 
 function publicActionDefinition(row: ActionDefinitionRow) {
+  const inputSchema = jsonParse(row.inputSchemaJson);
   return {
     id: row.id,
     serviceId: row.serviceId,
@@ -243,12 +244,25 @@ function publicActionDefinition(row: ActionDefinitionRow) {
     description: row.description,
     dangerLevel: row.dangerLevel,
     requiresConfirmation: Boolean(row.requiresConfirmation),
-    inputSchema: jsonParse(row.inputSchemaJson),
+    inputSchema,
     timeoutSeconds: row.timeoutSeconds,
     enabled: Boolean(row.enabled),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt
   };
+}
+
+function initialPayloadFromSchema(schema: Record<string, unknown>): Record<string, unknown> {
+  const properties = schema.properties;
+  if (!properties || typeof properties !== "object" || Array.isArray(properties)) return {};
+  return Object.fromEntries(Object.entries(properties as Record<string, { default?: unknown; type?: string | string[] }>).map(([key, meta]) => {
+    if (meta.default !== undefined) return [key, meta.default];
+    if (meta.type === "number" || meta.type === "integer") return [key, 0];
+    if (meta.type === "boolean") return [key, false];
+    if (meta.type === "array") return [key, []];
+    if (meta.type === "object") return [key, {}];
+    return [key, ""];
+  }));
 }
 
 function publicCommand(row: CommandRow) {
@@ -269,6 +283,23 @@ function publicCommand(row: CommandRow) {
     completedAt: row.completedAt,
     expiresAt: row.expiresAt
   };
+}
+
+async function waitForCommandResult(db: Db, commandId: string, timeoutMs = 10_000): Promise<{ command: CommandRow; result: CommandResultRow | undefined }> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const command = db.prepare("select * from commands where id = ?").get(commandId) as CommandRow | undefined;
+    const result = db.prepare("select * from command_results where commandId = ?").get(commandId) as CommandResultRow | undefined;
+    if (command && ["SUCCEEDED", "FAILED", "CANCELLED", "EXPIRED"].includes(command.status)) return { command, result };
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  const command = db.prepare("select * from commands where id = ?").get(commandId) as CommandRow | undefined;
+  if (command) {
+    const ts = now();
+    db.prepare("update commands set status = 'EXPIRED', errorCode = ?, errorMessage = ?, completedAt = ?, updatedAt = ? where id = ? and status in ('PENDING', 'RUNNING')")
+      .run("ACTION_PREPARE_TIMEOUT", "Action prepare timed out waiting for agent.", ts, ts, commandId);
+  }
+  throw Object.assign(new Error("Action prepare timed out waiting for agent."), { statusCode: 408, code: "ACTION_PREPARE_TIMEOUT" });
 }
 
 function publicCommandResult(row: CommandResultRow | undefined) {
@@ -1130,7 +1161,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     const row = db.prepare("select * from capsule_services where id = ? and workspaceId = ?").get(serviceId, DEFAULT_WORKSPACE.id) as CapsuleServiceRow | undefined;
     if (!row) throw Object.assign(new Error("Capsule Service not found."), { statusCode: 404, code: "CAPSULE_SERVICE_NOT_FOUND" });
     const configs = db.prepare("select * from config_items where serviceId = ? order by configKey asc").all(serviceId);
-    const actions = db.prepare("select * from action_definitions where serviceId = ? order by name asc").all(serviceId);
+    const actions = db.prepare("select * from action_definitions where serviceId = ? order by name asc").all(serviceId) as ActionDefinitionRow[];
     const health = db.prepare("select * from health_reports where serviceId = ? order by reportedAt desc limit 1").get(serviceId) as { status: string; message: string | null; detailsJson: string | null; reportedAt: string } | undefined;
     return {
       success: true,
@@ -1139,7 +1170,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
         manifest: jsonParse(row.manifestJson),
         health: health ? { ...health, details: jsonParse(health.detailsJson) } : null,
         configs,
-        actions
+        actions: actions.map(publicActionDefinition)
       }
     };
   });
@@ -1202,6 +1233,50 @@ export async function buildApp(options: BuildAppOptions = {}) {
     return { success: true, data: { services } };
   });
 
+  app.get("/api/admin/capsule-services/:serviceId/actions/:actionName", async (req) => {
+    const { user } = getSessionUser(req, db, config);
+    const params = req.params as { serviceId: string; actionName: string };
+    const service = db.prepare("select * from capsule_services where id = ? and workspaceId = ?").get(params.serviceId, DEFAULT_WORKSPACE.id) as CapsuleServiceRow | undefined;
+    if (!service) throw Object.assign(new Error("Capsule Service not found."), { statusCode: 404, code: "CAPSULE_SERVICE_NOT_FOUND" });
+    const action = db.prepare("select * from action_definitions where serviceId = ? and name = ? and enabled = 1").get(service.id, params.actionName) as ActionDefinitionRow | undefined;
+    if (!action) throw Object.assign(new Error("Action not found."), { statusCode: 404, code: "ACTION_NOT_FOUND" });
+    const ts = now();
+    const commandId = createId("cmd");
+    db.prepare(`
+      insert into commands (
+        id, workspaceId, agentId, serviceId, type, actionName, status, payloadJson,
+        createdByUserId, createdAt, updatedAt
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(commandId, DEFAULT_WORKSPACE.id, service.agentId, service.id, "ACTION_PREPARE", action.name, "PENDING", safeJsonStringify({}), user.id, ts, ts);
+    writeAudit(db, { actorType: "USER", actorId: user.id, action: "service.action.prepare_requested", targetType: "CapsuleService", targetId: service.id, metadata: { actionName: action.name, commandId } });
+    const { command, result } = await waitForCommandResult(db, commandId);
+    if (!result || !result.success) {
+      throw Object.assign(new Error(result?.message ?? command.errorMessage ?? "Action prepare failed."), { statusCode: 424, code: command.errorCode ?? "ACTION_PREPARE_FAILED" });
+    }
+    const data = jsonParse(result.dataJson) as Record<string, unknown>;
+    const catalogAction = publicActionDefinition(action);
+    const dynamicAction = data.action && typeof data.action === "object" && !Array.isArray(data.action) ? data.action as Record<string, unknown> : {};
+    const preparedAction = {
+      ...catalogAction,
+      ...dynamicAction,
+      id: catalogAction.id,
+      serviceId: catalogAction.serviceId,
+      name: catalogAction.name,
+      enabled: catalogAction.enabled,
+      createdAt: catalogAction.createdAt,
+      updatedAt: catalogAction.updatedAt
+    };
+    return {
+      success: true,
+      data: {
+        action: preparedAction,
+        initialPayload: data.initialPayload ?? initialPayloadFromSchema(preparedAction.inputSchema),
+        currentState: data.currentState ?? {},
+        prepareCommand: { ...publicCommand(command), result: publicCommandResult(result) }
+      }
+    };
+  });
+
 
   app.post("/api/admin/capsule-services/:serviceId/actions/:actionName", async (req) => {
     const { user } = getSessionUser(req, db, config);
@@ -1223,7 +1298,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
         id, workspaceId, agentId, serviceId, type, actionName, status, payloadJson,
         createdByUserId, createdAt, updatedAt, expiresAt
       ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(commandId, DEFAULT_WORKSPACE.id, service.agentId, service.id, "ACTION", action.name, "PENDING", safeJsonStringify(redactSecrets(body.payload ?? {})), user.id, ts, ts, expiresAt);
+    `).run(commandId, DEFAULT_WORKSPACE.id, service.agentId, service.id, "ACTION_EXECUTE", action.name, "PENDING", safeJsonStringify(redactSecrets(body.payload ?? {})), user.id, ts, ts, expiresAt);
     writeAudit(db, { actorType: "USER", actorId: user.id, action: "service.action.requested", targetType: "CapsuleService", targetId: service.id, metadata: { actionName: action.name } });
     writeAudit(db, { actorType: "USER", actorId: user.id, action: "command.created", targetType: "Command", targetId: commandId, metadata: { serviceId: service.id, actionName: action.name } });
     const command = db.prepare("select * from commands where id = ?").get(commandId) as CommandRow;
