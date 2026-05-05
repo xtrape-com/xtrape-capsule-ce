@@ -497,6 +497,8 @@ function ServiceDrawer({ service, refreshing, onClose, onRefresh, onCommandCreat
   const [prepareStartedAt, setPrepareStartedAt] = React.useState<number | null>(null);
   const [prepareElapsedMs, setPrepareElapsedMs] = React.useState(0);
   const [prepareError, setPrepareError] = React.useState<{ message: string; code?: string; status?: number; details?: Record<string, unknown> } | null>(null);
+  const [autoPollCommandId, setAutoPollCommandId] = React.useState<string | null>(null);
+  const [refreshAfterCommandId, setRefreshAfterCommandId] = React.useState<string | null>(null);
   const prepareRequestSeq = React.useRef(0);
   React.useEffect(() => {
     if (!prepareLoading || !prepareStartedAt) return undefined;
@@ -505,7 +507,35 @@ function ServiceDrawer({ service, refreshing, onClose, onRefresh, onCommandCreat
     const timer = window.setInterval(update, 1000);
     return () => window.clearInterval(timer);
   }, [prepareLoading, prepareStartedAt]);
-  const executeNamedAction = async (actionName: string, nextPayload: Record<string, unknown>, confirmation?: boolean) => {
+
+  React.useEffect(() => {
+    if (!commandResult || commandResult.id !== autoPollCommandId || isTerminalCommandStatus(commandResult.status)) return undefined;
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const updated = await apiFetch<Command>(`/api/admin/commands/${commandResult.id}`);
+        if (cancelled) return;
+        setCommandResult(updated);
+        if (isTerminalCommandStatus(updated.status)) {
+          if (updated.status === "SUCCEEDED") message.success(t("command.completed"));
+          else message.error(updated.errorMessage ?? t("command.failed"));
+          setAutoPollCommandId(null);
+          void onRefresh();
+          if (refreshAfterCommandId === updated.id) {
+            setRefreshAfterCommandId(null);
+            void refreshCurrentActionResult();
+          }
+        }
+      } catch (err) {
+        if (!cancelled) message.error(err instanceof Error ? err.message : String(err));
+      }
+    };
+    const timer = window.setInterval(() => void poll(), 2000);
+    void poll();
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [commandResult?.id, commandResult?.status, autoPollCommandId, refreshAfterCommandId]);
+
+  async function executeNamedAction(actionName: string, nextPayload: Record<string, unknown>, confirmation?: boolean, options: { silent?: boolean } = {}): Promise<Command | undefined> {
     if (!service) return;
     const targetAction = service.actions?.find((item) => item.name === actionName);
     setCommandRunning(true);
@@ -514,24 +544,49 @@ function ServiceDrawer({ service, refreshing, onClose, onRefresh, onCommandCreat
       setCommandResult(created);
       onCommandCreated();
       if (targetAction && isLongRunningAction(targetAction)) {
+        setAutoPollCommandId(created.id);
         message.info(t("command.startedAsync"));
         void onRefresh();
-        return;
+        return created;
       }
       const finished = await waitForCommandResult(created.id);
       setCommandResult(finished);
-      if (finished.status === "SUCCEEDED") message.success(t("command.completed"));
-      else message.error(finished.errorMessage ?? t("command.failed"));
+      if (!options.silent) {
+        if (finished.status === "SUCCEEDED") message.success(t("command.completed"));
+        else message.error(finished.errorMessage ?? t("command.failed"));
+      }
       void onRefresh();
+      return finished;
     } finally {
       setCommandRunning(false);
     }
-  };
+  }
+
+  async function refreshCurrentActionResult(): Promise<void> {
+    if (!service || !action) return;
+    let parsed: Record<string, unknown> = {};
+    try { parsed = JSON.parse(payload) as Record<string, unknown>; } catch { return; }
+    await executeNamedAction(action.name, parsed, false, { silent: true });
+  }
+
+  async function executeRowAction(actionName: string, nextPayload: Record<string, unknown>, confirmation?: boolean): Promise<void> {
+    const targetAction = service?.actions?.find((item) => item.name === actionName);
+    const result = await executeNamedAction(actionName, nextPayload, confirmation);
+    if (!result) return;
+    if (targetAction && isLongRunningAction(targetAction) && !isTerminalCommandStatus(result.status)) {
+      setRefreshAfterCommandId(result.id);
+      return;
+    }
+    if (isTerminalCommandStatus(result.status)) await refreshCurrentActionResult();
+  }
+
   const submitAction = async () => {
     if (!service || !action) return;
     let parsed: Record<string, unknown> = {};
     try { parsed = JSON.parse(payload) as Record<string, unknown>; } catch { message.error(t("service.invalidPayload")); return; }
     setCommandResult(null);
+    setAutoPollCommandId(null);
+    setRefreshAfterCommandId(null);
     await executeNamedAction(action.name, parsed, action.requiresConfirmation);
   };
   const openAction = async (next: Action) => {
@@ -540,6 +595,8 @@ function ServiceDrawer({ service, refreshing, onClose, onRefresh, onCommandCreat
     setPayload(JSON.stringify(defaultPayloadForAction(next), null, 2));
     setCommandResult(null);
     setCommandRunning(false);
+    setAutoPollCommandId(null);
+    setRefreshAfterCommandId(null);
     setInitialPayload(undefined);
     setPrepareError(null);
     if (!service) return;
@@ -655,7 +712,7 @@ function ServiceDrawer({ service, refreshing, onClose, onRefresh, onCommandCreat
               <Typography.Text code copyable={{ text: generatedKeyFromCommand(commandResult)! }}>{generatedKeyFromCommand(commandResult)}</Typography.Text>
             </Space>}
           />}
-          <ActionResultList command={commandResult} service={service} onRunAction={executeNamedAction} />
+          <ActionResultList command={commandResult} service={service} onRunAction={executeRowAction} />
           <Collapse
             size="small"
             style={{ marginTop: 16 }}
@@ -681,6 +738,9 @@ async function waitForCommandResult(commandId: string): Promise<Command> {
   return await apiFetch<Command>(`/api/admin/commands/${commandId}`);
 }
 
+function isTerminalCommandStatus(status: string): boolean {
+  return ["SUCCEEDED", "FAILED", "CANCELLED", "EXPIRED"].includes(status);
+}
 
 function generatedKeyFromCommand(command: Command | null): string | undefined {
   const resultData = command?.result?.data;
