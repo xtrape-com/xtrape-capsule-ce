@@ -2,7 +2,7 @@ export interface ApiEnvelope<T> {
   success: boolean;
   data: T;
   pagination?: { page: number; pageSize: number; total: number };
-  error?: { code: string; message: string };
+  error?: { code: string; message: string; details?: Record<string, unknown> };
 }
 
 export interface SessionData {
@@ -22,7 +22,7 @@ export function clearCsrfToken() {
 }
 
 export class ApiError extends Error {
-  constructor(public status: number, public code: string, message: string) {
+  constructor(public status: number, public code: string, message: string, public details?: Record<string, unknown>) {
     super(message);
   }
 }
@@ -31,7 +31,7 @@ async function refreshCsrfToken(): Promise<void> {
   const response = await fetch("/api/admin/auth/csrf", { credentials: "include" });
   const envelope = (await response.json().catch(() => ({}))) as ApiEnvelope<{ csrfToken: string }>;
   if (!response.ok || envelope.success === false) {
-    throw new ApiError(response.status, envelope.error?.code ?? "REQUEST_ERROR", envelope.error?.message ?? response.statusText);
+    throw new ApiError(response.status, envelope.error?.code ?? "REQUEST_ERROR", envelope.error?.message ?? response.statusText, envelope.error?.details);
   }
   setCsrfToken(envelope.data.csrfToken);
 }
@@ -54,7 +54,7 @@ export async function apiFetch<T>(path: string, options: RequestInit = {}, retry
     return apiFetch<T>(path, options, false);
   }
   if (!response.ok || envelope.success === false) {
-    throw new ApiError(response.status, envelope.error?.code ?? "REQUEST_ERROR", envelope.error?.message ?? response.statusText);
+    throw new ApiError(response.status, envelope.error?.code ?? "REQUEST_ERROR", envelope.error?.message ?? response.statusText, envelope.error?.details);
   }
   return envelope.data;
 }
@@ -63,7 +63,7 @@ export async function apiList<T>(path: string): Promise<{ data: T[]; pagination?
   const response = await fetch(path, { credentials: "include" });
   const envelope = (await response.json()) as ApiEnvelope<T[]>;
   if (!response.ok || envelope.success === false) {
-    throw new ApiError(response.status, envelope.error?.code ?? "REQUEST_ERROR", envelope.error?.message ?? response.statusText);
+    throw new ApiError(response.status, envelope.error?.code ?? "REQUEST_ERROR", envelope.error?.message ?? response.statusText, envelope.error?.details);
   }
   return { data: envelope.data, pagination: envelope.pagination };
 }
@@ -106,7 +106,7 @@ export async function apiDownload(path: string, options: RequestInit = {}): Prom
   }
   if (!response.ok) {
     const envelope = await response.json().catch(() => null) as ApiEnvelope<unknown> | null;
-    throw new ApiError(response.status, envelope?.error?.code ?? "REQUEST_ERROR", envelope?.error?.message ?? response.statusText);
+    throw new ApiError(response.status, envelope?.error?.code ?? "REQUEST_ERROR", envelope?.error?.message ?? response.statusText, envelope?.error?.details);
   }
   return await response.blob();
 }

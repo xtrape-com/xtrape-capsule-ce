@@ -496,7 +496,7 @@ function ServiceDrawer({ service, refreshing, onClose, onRefresh, onCommandCreat
   const [prepareLoading, setPrepareLoading] = React.useState(false);
   const [prepareStartedAt, setPrepareStartedAt] = React.useState<number | null>(null);
   const [prepareElapsedMs, setPrepareElapsedMs] = React.useState(0);
-  const [prepareError, setPrepareError] = React.useState<{ message: string; code?: string; status?: number } | null>(null);
+  const [prepareError, setPrepareError] = React.useState<{ message: string; code?: string; status?: number; details?: Record<string, unknown> } | null>(null);
   const prepareRequestSeq = React.useRef(0);
   React.useEffect(() => {
     if (!prepareLoading || !prepareStartedAt) return undefined;
@@ -557,7 +557,7 @@ function ServiceDrawer({ service, refreshing, onClose, onRefresh, onCommandCreat
     } catch (err) {
       if (requestSeq !== prepareRequestSeq.current) return;
       const error = err instanceof ApiError
-        ? { message: err.message, code: err.code, status: err.status }
+        ? { message: err.message, code: err.code, status: err.status, details: err.details }
         : { message: err instanceof Error ? err.message : String(err) };
       setPrepareError(error);
       message.error(error.message);
@@ -608,7 +608,10 @@ function ServiceDrawer({ service, refreshing, onClose, onRefresh, onCommandCreat
           showIcon
           style={{ marginBottom: 12 }}
           message={t("service.actionPrepareFailed")}
-          description={`${prepareError.message}${prepareError.code ? ` (${prepareError.code})` : ""}`}
+          description={<Space direction="vertical" style={{ width: "100%" }}>
+            <Typography.Text>{`${prepareError.message}${prepareError.code ? ` (${prepareError.code})` : ""}`}</Typography.Text>
+            {prepareError.details && <JsonBlock value={prepareError.details} />}
+          </Space>}
           action={<Button size="small" onClick={() => action && void openAction(action)}>{t("action.retry")}</Button>}
         />}
         <Typography.Paragraph>{action?.description}</Typography.Paragraph>

@@ -472,6 +472,56 @@ describe("Phase 3 command and action loop", () => {
     db.close();
   });
 
+  it("returns prepare command details when action prepare fails", async () => {
+    const db = openDatabase({ databaseUrl: ":memory:" });
+    const { app, cookie, agentId, agentToken, serviceId } = await setupRegisteredService(db);
+    const preparePromise = app.inject({
+      method: "GET",
+      url: `/api/admin/capsule-services/${serviceId}/actions/echo`,
+      cookies: { opstage_session: cookie.value }
+    });
+    let queuedCommand: { id: string } | undefined;
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      queuedCommand = db.prepare("select id from commands where type = 'ACTION_PREPARE' and actionName = 'echo' order by createdAt desc limit 1").get() as { id: string } | undefined;
+      if (queuedCommand) break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(queuedCommand).toBeDefined();
+
+    const poll = await app.inject({
+      method: "GET",
+      url: `/api/agents/${agentId}/commands?limit=1`,
+      headers: { authorization: `Bearer ${agentToken}` }
+    });
+    expect(poll.statusCode).toBe(200);
+    const commandId = poll.json().data[0].id as string;
+    expect(commandId).toBe(queuedCommand!.id);
+
+    const result = await app.inject({
+      method: "POST",
+      url: `/api/agents/${agentId}/commands/${commandId}/result`,
+      headers: { authorization: `Bearer ${agentToken}` },
+      payload: { success: false, message: "prepare failed", error: { code: "PREPARE_FAILED" } }
+    });
+    expect(result.statusCode).toBe(200);
+
+    const prepare = await preparePromise;
+    expect(prepare.statusCode).toBe(424);
+    expect(prepare.json().error).toMatchObject({
+      code: "ACTION_PREPARE_FAILED",
+      message: "prepare failed",
+      details: {
+        commandId,
+        commandStatus: "FAILED",
+        actionName: "echo",
+        agentId,
+        serviceId
+      }
+    });
+    await app.close();
+    db.close();
+  });
+
 
   it("cancels pending command from admin API", async () => {
     const { app, cookie, csrfToken, serviceId } = await setupRegisteredService();

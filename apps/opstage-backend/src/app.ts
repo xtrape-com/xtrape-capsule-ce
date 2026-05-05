@@ -304,7 +304,17 @@ async function waitForCommandResult(db: Db, commandId: string, timeoutMs = 30_00
     db.prepare("update commands set status = 'EXPIRED', errorCode = ?, errorMessage = ?, completedAt = ?, updatedAt = ? where id = ? and status in ('PENDING', 'RUNNING')")
       .run("ACTION_PREPARE_TIMEOUT", "Action prepare timed out waiting for agent.", ts, ts, commandId);
   }
-  throw Object.assign(new Error("Action prepare timed out waiting for agent."), { statusCode: 408, code: "ACTION_PREPARE_TIMEOUT" });
+  throw Object.assign(new Error("Action prepare timed out waiting for agent."), {
+    statusCode: 408,
+    code: "ACTION_PREPARE_TIMEOUT",
+    details: {
+      commandId,
+      commandStatus: command?.status ?? "UNKNOWN",
+      actionName: command?.actionName,
+      agentId: command?.agentId,
+      serviceId: command?.serviceId
+    }
+  });
 }
 
 function publicCommandResult(row: CommandResultRow | undefined, options: { consumeEphemeralSecrets?: boolean } = {}) {
@@ -834,12 +844,16 @@ export async function buildApp(options: BuildAppOptions = {}) {
   app.setErrorHandler((error, _request, reply) => {
     const statusCode = typeof (error as { statusCode?: unknown }).statusCode === "number" ? (error as { statusCode: number }).statusCode : 500;
     const code = typeof (error as { code?: unknown }).code === "string" ? (error as { code: string }).code : statusCode === 500 ? "INTERNAL_ERROR" : "REQUEST_ERROR";
+    const details = statusCode < 500 && typeof (error as { details?: unknown }).details === "object" && (error as { details?: unknown }).details !== null
+      ? redactSecrets((error as { details: Record<string, unknown> }).details)
+      : undefined;
     if (statusCode >= 500) app.log.error(error);
     reply.status(statusCode).send({
       success: false,
       error: {
         code,
-        message: statusCode >= 500 ? "Internal server error." : (error as Error).message
+        message: statusCode >= 500 ? "Internal server error." : (error as Error).message,
+        ...(details ? { details } : {})
       }
     });
   });
@@ -1312,7 +1326,17 @@ export async function buildApp(options: BuildAppOptions = {}) {
     writeAudit(db, { actorType: "USER", actorId: user.id, action: "service.action.prepare_requested", targetType: "CapsuleService", targetId: service.id, metadata: { actionName: action.name, commandId } });
     const { command, result } = await waitForCommandResult(db, commandId);
     if (!result || !result.success) {
-      throw Object.assign(new Error(result?.message ?? command.errorMessage ?? "Action prepare failed."), { statusCode: 424, code: command.errorCode ?? "ACTION_PREPARE_FAILED" });
+      throw Object.assign(new Error(result?.message ?? command.errorMessage ?? "Action prepare failed."), {
+        statusCode: 424,
+        code: command.errorCode ?? "ACTION_PREPARE_FAILED",
+        details: {
+          commandId: command.id,
+          commandStatus: command.status,
+          actionName: command.actionName,
+          agentId: command.agentId,
+          serviceId: command.serviceId
+        }
+      });
     }
     const data = jsonParse(result.dataJson) as Record<string, unknown>;
     const catalogAction = publicActionDefinition(action);
