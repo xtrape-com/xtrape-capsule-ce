@@ -71,6 +71,74 @@ const openapi = readFileSync(openapiPath, "utf8");
 const errors = JSON.parse(readFileSync(errorsPath, "utf8"));
 
 
+
+
+
+
+assertPathMethod(openapi, {
+  path: "/api/admin/users",
+  method: "get",
+  operationId: "listUsers",
+  responses: ["200", "401", "403", "422"],
+  includes: ["name: role", "owner", "operator", "viewer", "name: q", "maxLength: 160"]
+});
+
+assertPathMethod(openapi, {
+  path: "/api/admin/users",
+  method: "post",
+  operationId: "createUser",
+  responses: ["200", "401", "403", "409", "422"],
+  includes: ["CreateUserRequest", "CsrfToken", "operator", "viewer"]
+});
+
+assertPathMethod(openapi, {
+  path: "/api/admin/users/{userId}",
+  method: "patch",
+  operationId: "updateUser",
+  responses: ["200", "401", "403", "404", "409", "422"],
+  includes: ["UpdateUserRequest", "UserId", "LAST_OWNER_REQUIRED"]
+});
+
+assertPathMethod(openapi, {
+  path: "/api/admin/users/{userId}/reset-password",
+  method: "post",
+  operationId: "resetUserPassword",
+  responses: ["200", "401", "403", "404", "422"],
+  includes: ["ResetUserPasswordRequest"]
+});
+
+assertPathMethod(openapi, {
+  path: "/api/admin/registration-tokens",
+  method: "get",
+  operationId: "listRegistrationTokens",
+  responses: ["200", "401", "422"],
+  includes: ["TokenStatus", "name: status"]
+});
+
+assertPathMethod(openapi, {
+  path: "/api/admin/agents",
+  method: "get",
+  operationId: "listAgents",
+  responses: ["200", "401", "422"],
+  includes: ["AgentStatus", "name: q", "maxLength: 120"]
+});
+
+assertPathMethod(openapi, {
+  path: "/api/admin/capsule-services",
+  method: "get",
+  operationId: "listCapsuleServices",
+  responses: ["200", "401", "422"],
+  includes: ["CapsuleServiceStatus", "HealthStatus", "name: agentId", "name: q", "maxLength: 120"]
+});
+
+assertPathMethod(openapi, {
+  path: "/api/admin/audit-events",
+  method: "get",
+  operationId: "listAuditEvents",
+  responses: ["200", "401", "422"],
+  includes: ["AuditActorType", "AuditResult", "name: from", "name: to", "format: date-time"]
+});
+
 assertPathMethod(openapi, {
   path: "/api/admin/commands",
   method: "get",
@@ -112,6 +180,9 @@ assertPathMethod(openapi, {
 });
 
 assertSchema(openapi, "ActionPrepareResponse", ["action", "initialPayload"]);
+assertSchema(openapi, "CreateUserRequest", ["username", "password", "role"]);
+assertSchema(openapi, "UpdateUserRequest", ["displayName", "role", "status"]);
+assertSchema(openapi, "ResetUserPasswordRequest", ["password"]);
 assertSchema(openapi, "AdminMetrics", ["totals", "byStatus", "operational"]);
 assertSchema(openapi, "OperationalMetrics", [
   "agentCommandPolls",

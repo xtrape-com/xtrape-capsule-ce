@@ -157,8 +157,10 @@ function Dashboard() {
 
 function Users() {
   const { t } = useI18n();
+  const [filters, setFilters] = React.useState<{ q?: string; role?: string; status?: string }>({});
   const [page, setPage] = React.useState<PageState>(defaultPage);
-  const { data, loading, error, reload } = useQueryData(() => apiList<User>(`/api/admin/users${queryString({ ...page })}`), [page.page, page.pageSize]);
+  const updateFilters = (next: { q?: string; role?: string; status?: string }) => { setFilters(next); setPage(defaultPage); };
+  const { data, loading, error, reload } = useQueryData(() => apiList<User>(`/api/admin/users${queryString({ ...filters, ...page })}`), [filters.q, filters.role, filters.status, page.page, page.pageSize]);
   const [createOpen, setCreateOpen] = React.useState(false);
   const [editTarget, setEditTarget] = React.useState<User | null>(null);
   const [resetTarget, setResetTarget] = React.useState<User | null>(null);
@@ -187,6 +189,12 @@ function Users() {
         <Button type="primary" htmlType="submit">{t("user.resetPassword")}</Button>
       </Form>
     </Modal>
+    <Space style={{ marginBottom: 16 }} wrap>
+      <Input.Search placeholder={t("user.searchPlaceholder")} allowClear onSearch={(q) => updateFilters({ ...filters, q })} style={{ width: 260 }} />
+      <Select allowClear placeholder={t("common.role")} style={{ width: 160 }} onChange={(role) => updateFilters({ ...filters, role })} options={["owner", "operator", "viewer"].map(value => ({ value, label: value }))} />
+      <Select allowClear placeholder={t("common.status")} style={{ width: 160 }} onChange={(status) => updateFilters({ ...filters, status })} options={["ACTIVE", "DISABLED"].map(value => ({ value, label: value }))} />
+      <Button onClick={() => updateFilters({})}>{t("user.resetFilters")}</Button>
+    </Space>
     <Table rowKey="id" loading={loading} dataSource={data?.data ?? []} pagination={{ current: data?.pagination?.page ?? page.page, pageSize: data?.pagination?.pageSize ?? page.pageSize, total: data?.pagination?.total, showSizeChanger: true, onChange: (nextPage, nextPageSize) => setPage({ page: nextPage, pageSize: nextPageSize }) }} columns={[
       { title: t("common.username"), dataIndex: "username" }, { title: t("common.displayName"), dataIndex: "displayName" }, { title: t("common.role"), dataIndex: "role", render: (v) => <Tag>{v}</Tag> }, { title: t("common.status"), dataIndex: "status", render: (v) => <StatusTag value={v} /> }, { title: t("user.lastLogin"), dataIndex: "lastLoginAt" },
       { title: t("common.operation"), render: (_, row) => <Space><Button size="small" onClick={() => setEditTarget(row)}>{t("action.edit")}</Button><Button size="small" onClick={() => setResetTarget(row)}>{t("user.resetPassword")}</Button>{row.status === "ACTIVE" ? <Popconfirm title={t("confirm.disableUser")} onConfirm={async () => { await apiFetch(`/api/admin/users/${row.id}`, { method: "PATCH", body: JSON.stringify({ status: "DISABLED" }) }); message.success(t("user.disabled")); void reload(); }}><Button danger size="small" disabled={row.role === "owner"}>{t("action.disable")}</Button></Popconfirm> : <Button size="small" onClick={async () => { await apiFetch(`/api/admin/users/${row.id}`, { method: "PATCH", body: JSON.stringify({ status: "ACTIVE" }) }); message.success(t("user.enabled")); void reload(); }}>{t("action.enable")}</Button>}</Space> }
@@ -196,8 +204,10 @@ function Users() {
 
 function RegistrationTokens() {
   const { t } = useI18n();
+  const [filters, setFilters] = React.useState<{ status?: string }>({});
   const [page, setPage] = React.useState<PageState>(defaultPage);
-  const { data, loading, reload } = useQueryData(() => apiList<RegistrationToken>(`/api/admin/registration-tokens${queryString({ ...page })}`), [page.page, page.pageSize]);
+  const updateFilters = (next: { status?: string }) => { setFilters(next); setPage(defaultPage); };
+  const { data, loading, reload } = useQueryData(() => apiList<RegistrationToken>(`/api/admin/registration-tokens${queryString({ ...filters, ...page })}`), [filters.status, page.page, page.pageSize]);
   const [created, setCreated] = React.useState<RegistrationToken | null>(null);
   const [createOpen, setCreateOpen] = React.useState(false);
   const createdTokenValue = created?.token ?? created?.rawToken ?? "";
@@ -208,6 +218,10 @@ function RegistrationTokens() {
   };
   return <Card title={t("registration.title")} extra={<Space><Button onClick={reload}>{t("action.refresh")}</Button><Button type="primary" onClick={() => setCreateOpen(true)}>{t("action.create")}</Button></Space>}>
     {created && <Card type="inner" title={t("registration.createdOnce")} style={{ marginBottom: 16 }} extra={createdTokenValue ? <Button onClick={() => void copyCreatedToken()}>{t("registration.copyToken")}</Button> : null}>{createdTokenValue ? <Input.TextArea value={createdTokenValue} autoSize readOnly /> : <Typography.Text type="danger">{t("registration.tokenUnavailable")}</Typography.Text>}</Card>}
+    <Space style={{ marginBottom: 16 }} wrap>
+      <Select allowClear placeholder={t("common.status")} style={{ width: 180 }} onChange={(status) => updateFilters({ ...filters, status })} options={["ACTIVE", "USED", "REVOKED", "EXPIRED"].map(value => ({ value, label: value }))} />
+      <Button onClick={() => updateFilters({})}>{t("registration.resetFilters")}</Button>
+    </Space>
     <Modal open={createOpen} title={t("registration.createTitle")} footer={null} onCancel={() => setCreateOpen(false)} destroyOnClose>
       <CreateTokenForm onCreated={(token) => { setCreated(token); setCreateOpen(false); void reload(); }} />
     </Modal>
@@ -241,6 +255,7 @@ function CreateTokenForm({ onCreated }: { onCreated: (token: RegistrationToken) 
 
 function Agents() {
   const { t } = useI18n();
+  const navigate = useNavigate();
   const [filters, setFilters] = React.useState<{ q?: string; status?: string }>({});
   const [page, setPage] = React.useState<PageState>(defaultPage);
   const updateFilters = (next: { q?: string; status?: string }) => { setFilters(next); setPage(defaultPage); };
@@ -260,17 +275,19 @@ function Agents() {
       setRefreshing(false);
     }
   };
+  const openAgentServices = (agentId: string) => navigate(`/services?agentId=${encodeURIComponent(agentId)}`);
   return <Card title={t("menu.agents")} extra={<Button loading={refreshing} onClick={() => void refreshAgents()}>{t("action.refresh")}</Button>}>
     <Space style={{ marginBottom: 16 }} wrap>
       <Input.Search placeholder={t("common.searchCodeName")} allowClear onSearch={(q) => updateFilters({ ...filters, q })} style={{ width: 240 }} />
-      <Select allowClear placeholder={t("common.status")} style={{ width: 160 }} onChange={(status) => updateFilters({ ...filters, status })} options={["ONLINE", "OFFLINE", "DISABLED", "REVOKED"].map(value => ({ value, label: value }))} />
+      <Select allowClear placeholder={t("common.status")} style={{ width: 160 }} onChange={(status) => updateFilters({ ...filters, status })} options={["PENDING", "ONLINE", "OFFLINE", "DISABLED", "REVOKED"].map(value => ({ value, label: value }))} />
+      <Button onClick={() => updateFilters({})}>{t("agent.resetFilters")}</Button>
     </Space>
-    <Table rowKey="id" loading={loading} dataSource={data?.data ?? []} pagination={{ current: data?.pagination?.page ?? page.page, pageSize: data?.pagination?.pageSize ?? page.pageSize, total: data?.pagination?.total, showSizeChanger: true, onChange: (nextPage, nextPageSize) => setPage({ page: nextPage, pageSize: nextPageSize }) }} onRow={(row) => ({ onClick: () => void openAgent(row.id) })} columns={[
-      { title: t("common.code"), dataIndex: "code" }, { title: t("common.name"), dataIndex: "name" }, { title: t("common.mode"), dataIndex: "mode" }, { title: t("common.runtime"), dataIndex: "runtime" }, { title: t("common.status"), dataIndex: "status", render: (v) => <StatusTag value={v} /> }, { title: "Heartbeat", dataIndex: "lastHeartbeatAt" },
-      { title: t("common.operation"), render: (_, row) => row.status === "REVOKED" ? null : <Space>{row.status === "DISABLED" ? <Popconfirm title={t("confirm.enableAgent")} onConfirm={async (event) => { event?.stopPropagation(); await apiFetch(`/api/admin/agents/${row.id}/enable`, { method: "POST" }); message.success(t("user.enabled")); void reload(); }}><Button size="small" onClick={(event) => event.stopPropagation()}>{t("action.enable")}</Button></Popconfirm> : <Popconfirm title={t("confirm.disableAgent")} onConfirm={async (event) => { event?.stopPropagation(); await apiFetch(`/api/admin/agents/${row.id}/disable`, { method: "POST" }); message.success(t("user.disabled")); void reload(); }}><Button size="small" onClick={(event) => event.stopPropagation()}>{t("action.disable")}</Button></Popconfirm>}<Popconfirm title={t("confirm.revokeAgent")} onConfirm={async (event) => { event?.stopPropagation(); await apiFetch(`/api/admin/agents/${row.id}/revoke`, { method: "POST" }); message.success(t("registration.revoked")); void reload(); }}><Button danger size="small" onClick={(event) => event.stopPropagation()}>{t("action.revoke")}</Button></Popconfirm></Space> }
+    <Table rowKey="id" loading={loading} dataSource={data?.data ?? []} scroll={{ x: 1200 }} pagination={{ current: data?.pagination?.page ?? page.page, pageSize: data?.pagination?.pageSize ?? page.pageSize, total: data?.pagination?.total, showSizeChanger: true, onChange: (nextPage, nextPageSize) => setPage({ page: nextPage, pageSize: nextPageSize }) }} onRow={(row) => ({ onClick: () => void openAgent(row.id) })} columns={[
+      { title: t("common.id"), dataIndex: "id", render: (v) => <Typography.Text code copyable>{String(v)}</Typography.Text> }, { title: t("common.code"), dataIndex: "code" }, { title: t("common.name"), dataIndex: "name" }, { title: t("common.mode"), dataIndex: "mode" }, { title: t("common.runtime"), dataIndex: "runtime" }, { title: t("common.status"), dataIndex: "status", render: (v) => <StatusTag value={v} /> }, { title: "Heartbeat", dataIndex: "lastHeartbeatAt" },
+      { title: t("common.operation"), render: (_, row) => <Space>{row.status === "REVOKED" ? null : row.status === "DISABLED" ? <Popconfirm title={t("confirm.enableAgent")} onConfirm={async (event) => { event?.stopPropagation(); await apiFetch(`/api/admin/agents/${row.id}/enable`, { method: "POST" }); message.success(t("user.enabled")); void reload(); }}><Button size="small" onClick={(event) => event.stopPropagation()}>{t("action.enable")}</Button></Popconfirm> : <Popconfirm title={t("confirm.disableAgent")} onConfirm={async (event) => { event?.stopPropagation(); await apiFetch(`/api/admin/agents/${row.id}/disable`, { method: "POST" }); message.success(t("user.disabled")); void reload(); }}><Button size="small" onClick={(event) => event.stopPropagation()}>{t("action.disable")}</Button></Popconfirm>}<Button size="small" onClick={(event) => { event.stopPropagation(); openAgentServices(row.id); }}>{t("agent.viewServices")}</Button>{row.status === "REVOKED" ? null : <Popconfirm title={t("confirm.revokeAgent")} onConfirm={async (event) => { event?.stopPropagation(); await apiFetch(`/api/admin/agents/${row.id}/revoke`, { method: "POST" }); message.success(t("registration.revoked")); void reload(); }}><Button danger size="small" onClick={(event) => event.stopPropagation()}>{t("action.revoke")}</Button></Popconfirm>}</Space> }
     ] as ColumnsType<Agent>} />
-    <Drawer open={!!selected} onClose={() => setSelected(null)} title={selected?.code} width={720} extra={<Button disabled={!selected} loading={refreshing} onClick={() => void refreshAgents()}>{t("action.refresh")}</Button>}>
-      <Descriptions bordered column={1} items={selected ? Object.entries(selected).filter(([k]) => k !== "services").map(([key, value]) => ({ key, label: key, children: String(value ?? "-") })) : []} />
+    <Drawer open={!!selected} onClose={() => setSelected(null)} title={selected?.code} width={780} extra={<Button disabled={!selected} loading={refreshing} onClick={() => void refreshAgents()}>{t("action.refresh")}</Button>}>
+      <Descriptions bordered column={1} items={selected ? Object.entries(selected).filter(([k]) => k !== "services").map(([key, value]) => ({ key, label: key, children: key === "id" ? <Typography.Text code copyable>{String(value ?? "-")}</Typography.Text> : String(value ?? "-") })) : []} />
       <Typography.Title level={4} style={{ marginTop: 24 }}>{t("menu.services")}</Typography.Title>
       <Table rowKey="id" dataSource={selected?.services ?? []} pagination={false} columns={[{ title: t("common.code"), dataIndex: "code" }, { title: t("common.name"), dataIndex: "name" }, { title: t("common.health"), dataIndex: "healthStatus", render: (v) => <StatusTag value={v} /> }]} />
     </Drawer>
@@ -279,12 +296,32 @@ function Agents() {
 
 function Services() {
   const { t } = useI18n();
-  const [filters, setFilters] = React.useState<{ q?: string; status?: string; healthStatus?: string }>({});
+  const location = useLocation();
+  const navigate = useNavigate();
+  const initialAgentId = new URLSearchParams(location.search).get("agentId") ?? "";
+  const [filters, setFilters] = React.useState<{ q?: string; status?: string; healthStatus?: string; agentId?: string }>(initialAgentId ? { agentId: initialAgentId } : {});
+  const [agentIdDraft, setAgentIdDraft] = React.useState(initialAgentId);
   const [page, setPage] = React.useState<PageState>(defaultPage);
-  const updateFilters = (next: { q?: string; status?: string; healthStatus?: string }) => { setFilters(next); setPage(defaultPage); };
-  const { data, loading, reload } = useQueryData(() => apiList<Service>(`/api/admin/capsule-services${queryString({ ...filters, ...page })}`), [filters.q, filters.status, filters.healthStatus, page.page, page.pageSize]);
+  const updateFilters = (next: { q?: string; status?: string; healthStatus?: string; agentId?: string }) => { setFilters(next); setPage(defaultPage); };
+  const { data, loading, reload } = useQueryData(() => apiList<Service>(`/api/admin/capsule-services${queryString({ ...filters, ...page })}`), [filters.q, filters.status, filters.healthStatus, filters.agentId, page.page, page.pageSize]);
   const [selected, setSelected] = React.useState<Service | null>(null);
   const [refreshing, setRefreshing] = React.useState(false);
+  React.useEffect(() => {
+    const agentId = new URLSearchParams(location.search).get("agentId") ?? "";
+    setAgentIdDraft(agentId);
+    setFilters((current) => current.agentId === (agentId || undefined) ? current : { ...current, agentId: agentId || undefined });
+    setPage(defaultPage);
+  }, [location.search]);
+  const applyAgentFilter = () => {
+    const nextAgentId = agentIdDraft.trim();
+    updateFilters({ ...filters, agentId: nextAgentId || undefined });
+    navigate(nextAgentId ? `/services?agentId=${encodeURIComponent(nextAgentId)}` : "/services", { replace: true });
+  };
+  const resetServiceFilters = () => {
+    setAgentIdDraft("");
+    updateFilters({});
+    navigate("/services", { replace: true });
+  };
   const openService = async (id: string) => setSelected(await apiFetch<Service>(`/api/admin/capsule-services/${id}`));
   const refreshServices = async () => {
     setRefreshing(true);
@@ -301,11 +338,14 @@ function Services() {
   return <Card title={t("service.title")} extra={<Button loading={refreshing} onClick={() => void refreshServices()}>{t("action.refresh")}</Button>}>
     <Space style={{ marginBottom: 16 }} wrap>
       <Input.Search placeholder={t("common.searchCodeName")} allowClear onSearch={(q) => updateFilters({ ...filters, q })} style={{ width: 240 }} />
-      <Select allowClear placeholder={t("service.serviceStatus")} style={{ width: 160 }} onChange={(status) => updateFilters({ ...filters, status })} options={["HEALTHY", "UNHEALTHY", "UNKNOWN"].map(value => ({ value, label: value }))} />
+      <Select allowClear placeholder={t("service.serviceStatus")} style={{ width: 160 }} onChange={(status) => updateFilters({ ...filters, status })} options={["HEALTHY", "UNHEALTHY", "UNKNOWN", "STALE", "OFFLINE"].map(value => ({ value, label: value }))} />
       <Select allowClear placeholder={t("service.healthStatus")} style={{ width: 160 }} onChange={(healthStatus) => updateFilters({ ...filters, healthStatus })} options={["UP", "DEGRADED", "DOWN", "UNKNOWN"].map(value => ({ value, label: value }))} />
+      <Input placeholder={t("command.agentId")} allowClear value={agentIdDraft} onChange={(event) => setAgentIdDraft(event.target.value)} style={{ width: 220 }} />
+      <Button onClick={applyAgentFilter}>{t("service.applyAgentFilter")}</Button>
+      <Button onClick={resetServiceFilters}>{t("service.resetFilters")}</Button>
     </Space>
-    <Table rowKey="id" loading={loading} dataSource={data?.data ?? []} pagination={{ current: data?.pagination?.page ?? page.page, pageSize: data?.pagination?.pageSize ?? page.pageSize, total: data?.pagination?.total, showSizeChanger: true, onChange: (nextPage, nextPageSize) => setPage({ page: nextPage, pageSize: nextPageSize }) }} onRow={(row) => ({ onClick: () => void openService(row.id) })} columns={[
-      { title: t("common.code"), dataIndex: "code" }, { title: t("common.name"), dataIndex: "name" }, { title: t("common.version"), dataIndex: "version" }, { title: t("common.status"), dataIndex: "status", render: (v) => <StatusTag value={v} /> }, { title: t("common.health"), dataIndex: "healthStatus", render: (v) => <StatusTag value={v} /> }, { title: t("service.lastReportedAt"), dataIndex: "lastReportedAt" }
+    <Table rowKey="id" loading={loading} dataSource={data?.data ?? []} scroll={{ x: 1100 }} pagination={{ current: data?.pagination?.page ?? page.page, pageSize: data?.pagination?.pageSize ?? page.pageSize, total: data?.pagination?.total, showSizeChanger: true, onChange: (nextPage, nextPageSize) => setPage({ page: nextPage, pageSize: nextPageSize }) }} onRow={(row) => ({ onClick: () => void openService(row.id) })} columns={[
+      { title: t("common.code"), dataIndex: "code" }, { title: t("common.name"), dataIndex: "name" }, { title: t("command.agentId"), dataIndex: "agentId", render: (v) => <Typography.Text code copyable>{String(v)}</Typography.Text> }, { title: t("common.version"), dataIndex: "version" }, { title: t("common.status"), dataIndex: "status", render: (v) => <StatusTag value={v} /> }, { title: t("common.health"), dataIndex: "healthStatus", render: (v) => <StatusTag value={v} /> }, { title: t("service.lastReportedAt"), dataIndex: "lastReportedAt" }
     ]} />
     <ServiceDrawer service={selected} refreshing={refreshing} onClose={() => setSelected(null)} onRefresh={() => void refreshServices()} onCommandCreated={() => { message.success(t("command.createdWaitAgent")); void refreshServices(); }} />
   </Card>;
@@ -890,16 +930,23 @@ function Commands() {
 
 function AuditEvents() {
   const { t } = useI18n();
-  const [filters, setFilters] = React.useState<{ actorType?: string; result?: string; action?: string; targetType?: string }>({});
+  const [filters, setFilters] = React.useState<{ actorType?: string; result?: string; action?: string; targetType?: string; from?: string; to?: string }>({});
+  const [draftRange, setDraftRange] = React.useState<{ from?: string; to?: string }>({});
   const [page, setPage] = React.useState<PageState>(defaultPage);
-  const updateFilters = (next: { actorType?: string; result?: string; action?: string; targetType?: string }) => { setFilters(next); setPage(defaultPage); };
-  const { data, loading, reload } = useQueryData(() => apiList<AuditEvent>(`/api/admin/audit-events${queryString({ ...filters, ...page })}`), [filters.actorType, filters.result, filters.action, filters.targetType, page.page, page.pageSize], 5000);
-  return <Card title={t("audit.title")} extra={<Space><Button onClick={() => void downloadBlob(`/api/admin/audit-events/export?format=csv${filters.action ? `&action=${filters.action}` : ""}`, "audit-events.csv")}>{t("action.exportCsv")}</Button><Button onClick={reload}>{t("action.refresh")}</Button></Space>}>
+  const updateFilters = (next: { actorType?: string; result?: string; action?: string; targetType?: string; from?: string; to?: string }) => { setFilters(next); setPage(defaultPage); };
+  const auditQuery = queryString({ ...filters, ...page });
+  const exportCsvQuery = queryString({ ...filters, format: "csv" });
+  const { data, loading, reload } = useQueryData(() => apiList<AuditEvent>(`/api/admin/audit-events${auditQuery}`), [filters.actorType, filters.result, filters.action, filters.targetType, filters.from, filters.to, page.page, page.pageSize], 5000);
+  return <Card title={t("audit.title")} extra={<Space><Button onClick={() => void downloadBlob(`/api/admin/audit-events/export${exportCsvQuery}`, "audit-events.csv")}>{t("action.exportCsv")}</Button><Button onClick={reload}>{t("action.refresh")}</Button></Space>}>
     <Space style={{ marginBottom: 16 }} wrap>
       <Input.Search placeholder="Action" allowClear onSearch={(action) => updateFilters({ ...filters, action })} style={{ width: 220 }} />
       <Select allowClear placeholder="Actor" style={{ width: 140 }} onChange={(actorType) => updateFilters({ ...filters, actorType })} options={["USER", "AGENT", "SYSTEM"].map(value => ({ value, label: value }))} />
       <Select allowClear placeholder="Result" style={{ width: 140 }} onChange={(result) => updateFilters({ ...filters, result })} options={["SUCCESS", "FAILURE"].map(value => ({ value, label: value }))} />
       <Input placeholder={t("audit.targetType")} allowClear onChange={(event) => updateFilters({ ...filters, targetType: event.target.value })} style={{ width: 180 }} />
+      <Input placeholder={t("audit.fromPlaceholder")} allowClear value={draftRange.from} onChange={(event) => setDraftRange({ ...draftRange, from: event.target.value })} style={{ width: 260 }} />
+      <Input placeholder={t("audit.toPlaceholder")} allowClear value={draftRange.to} onChange={(event) => setDraftRange({ ...draftRange, to: event.target.value })} style={{ width: 260 }} />
+      <Button onClick={() => updateFilters({ ...filters, from: draftRange.from, to: draftRange.to })}>{t("audit.applyTimeRange")}</Button>
+      <Button onClick={() => { setDraftRange({}); updateFilters({}); }}>{t("audit.resetFilters")}</Button>
     </Space>
     <Table rowKey="id" loading={loading} dataSource={data?.data ?? []} pagination={{ current: data?.pagination?.page ?? page.page, pageSize: data?.pagination?.pageSize ?? page.pageSize, total: data?.pagination?.total, showSizeChanger: true, onChange: (nextPage, nextPageSize) => setPage({ page: nextPage, pageSize: nextPageSize }) }} columns={[{ title: t("common.time"), dataIndex: "createdAt" }, { title: t("common.actor"), dataIndex: "actorType" }, { title: "Action", dataIndex: "action" }, { title: t("audit.targetType"), dataIndex: "targetType" }, { title: t("common.result"), dataIndex: "result", render: (v) => <StatusTag value={String(v)} /> }, { title: t("common.message"), dataIndex: "message" }]} />
   </Card>;

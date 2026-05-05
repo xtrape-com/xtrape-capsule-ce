@@ -177,29 +177,98 @@ const commandListQuerySchema = z.object({
   serviceId: z.string().regex(/^svc_/, "serviceId must start with svc_").optional()
 });
 
+
+
+
+const userListQuerySchema = z.object({
+  role: z.enum(["owner", "operator", "viewer"]).optional(),
+  status: z.enum(["ACTIVE", "DISABLED"]).optional(),
+  q: z.string().trim().min(1).max(160).optional()
+});
+const registrationTokenListQuerySchema = z.object({
+  status: z.enum(["ACTIVE", "USED", "REVOKED", "EXPIRED"]).optional()
+});
+const agentListQuerySchema = z.object({
+  status: z.enum(["PENDING", "ONLINE", "OFFLINE", "DISABLED", "REVOKED"]).optional(),
+  q: z.string().trim().min(1).max(120).optional()
+});
+
+const serviceListQuerySchema = z.object({
+  status: z.enum(["UNKNOWN", "HEALTHY", "UNHEALTHY", "STALE", "OFFLINE"]).optional(),
+  healthStatus: z.enum(["UP", "DEGRADED", "DOWN", "UNKNOWN"]).optional(),
+  agentId: z.string().regex(/^agt_/, "agentId must start with agt_").optional(),
+  q: z.string().trim().min(1).max(120).optional()
+});
+const auditEventQuerySchema = z.object({
+  actorType: z.enum(["USER", "AGENT", "SYSTEM"]).optional(),
+  result: z.enum(["SUCCESS", "FAILURE"]).optional(),
+  action: z.string().trim().min(1).max(160).optional(),
+  targetType: z.string().trim().min(1).max(120).optional(),
+  from: z.string().refine(value => Number.isFinite(Date.parse(value)), "from must be an ISO-8601 date-time").optional(),
+  to: z.string().refine(value => Number.isFinite(Date.parse(value)), "to must be an ISO-8601 date-time").optional(),
+  format: z.enum(["json", "csv"]).optional()
+});
+
+function validationError(message: string, issues: z.ZodIssue[]) {
+  return Object.assign(new Error(message), {
+    statusCode: 422,
+    code: "VALIDATION_FAILED",
+    details: { issues: issues.map(issue => ({ path: issue.path.join("."), message: issue.message })) }
+  });
+}
+
 function optionalQueryText(value: unknown): string | undefined {
   if (Array.isArray(value)) value = value[0];
   if (value === undefined || value === null || value === "") return undefined;
   return String(value);
 }
 
-function parseCommandListQuery(query: unknown): z.infer<typeof commandListQuerySchema> {
+function parseQuerySchema<T extends z.ZodTypeAny>(
+  schema: T,
+  query: unknown,
+  fields: readonly string[],
+  message: string
+): z.infer<T> {
   const input = query as Record<string, unknown> | undefined;
-  const result = commandListQuerySchema.safeParse({
-    status: optionalQueryText(input?.status),
-    type: optionalQueryText(input?.type),
-    actionName: optionalQueryText(input?.actionName),
-    agentId: optionalQueryText(input?.agentId),
-    serviceId: optionalQueryText(input?.serviceId)
-  });
+  const normalized = Object.fromEntries(fields.map(field => [field, optionalQueryText(input?.[field])]));
+  const result = schema.safeParse(normalized);
   if (!result.success) {
-    throw Object.assign(new Error("Command query validation failed."), {
-      statusCode: 422,
-      code: "VALIDATION_FAILED",
-      details: { issues: result.error.issues.map(issue => ({ path: issue.path.join("."), message: issue.message })) }
-    });
+    throw validationError(message, result.error.issues);
   }
   return result.data;
+}
+
+function parseCommandListQuery(query: unknown): z.infer<typeof commandListQuerySchema> {
+  return parseQuerySchema(commandListQuerySchema, query, ["status", "type", "actionName", "agentId", "serviceId"], "Command query validation failed.");
+}
+
+function parseUserListQuery(query: unknown): z.infer<typeof userListQuerySchema> {
+  return parseQuerySchema(userListQuerySchema, query, ["role", "status", "q"], "User query validation failed.");
+}
+
+function parseRegistrationTokenListQuery(query: unknown): z.infer<typeof registrationTokenListQuerySchema> {
+  return parseQuerySchema(registrationTokenListQuerySchema, query, ["status"], "Registration token query validation failed.");
+}
+
+function parseAgentListQuery(query: unknown): z.infer<typeof agentListQuerySchema> {
+  return parseQuerySchema(agentListQuerySchema, query, ["status", "q"], "Agent query validation failed.");
+}
+
+function parseServiceListQuery(query: unknown): z.infer<typeof serviceListQuerySchema> {
+  return parseQuerySchema(serviceListQuerySchema, query, ["status", "healthStatus", "agentId", "q"], "Capsule Service query validation failed.");
+}
+
+function parseAuditEventQuery(query: unknown): z.infer<typeof auditEventQuerySchema> {
+  const result = parseQuerySchema(
+    auditEventQuerySchema,
+    query,
+    ["actorType", "result", "action", "targetType", "from", "to", "format"],
+    "Audit event query validation failed."
+  );
+  if (result.from && result.to && Date.parse(result.from) > Date.parse(result.to)) {
+    throw validationError("Audit event query validation failed.", [{ code: "custom", path: ["from"], message: "from must be before or equal to to" } as z.ZodIssue]);
+  }
+  return result;
 }
 
 const sessions = new Map<string, Session>();
@@ -636,16 +705,22 @@ function csvCell(value: unknown): string {
   return `"${text.replace(/"/g, '""')}"`;
 }
 
-function auditExportRows(db: Db, query: { actorType?: string; result?: string; action?: string; targetType?: string } | undefined): AuditEventRow[] {
+function auditQueryWhere(query: z.infer<typeof auditEventQuerySchema>) {
   const clauses = ["workspaceId = ?"];
   const values: unknown[] = [DEFAULT_WORKSPACE.id];
-  for (const [key, value] of Object.entries({ actorType: query?.actorType, result: query?.result, action: query?.action, targetType: query?.targetType })) {
+  for (const [key, value] of Object.entries({ actorType: query.actorType, result: query.result, action: query.action, targetType: query.targetType })) {
     if (value) {
       clauses.push(`${key} = ?`);
       values.push(value);
     }
   }
-  const where = clauses.join(" and ");
+  if (query.from) { clauses.push("createdAt >= ?"); values.push(new Date(query.from).toISOString()); }
+  if (query.to) { clauses.push("createdAt <= ?"); values.push(new Date(query.to).toISOString()); }
+  return { where: clauses.join(" and "), values };
+}
+
+function auditExportRows(db: Db, query: z.infer<typeof auditEventQuerySchema>): AuditEventRow[] {
+  const { where, values } = auditQueryWhere(query);
   return db.prepare(`select * from audit_events where ${where} order by createdAt desc limit 10000`).all(...values) as AuditEventRow[];
 }
 
@@ -1034,8 +1109,15 @@ export async function buildApp(options: BuildAppOptions = {}) {
     const { user } = getSessionUser(req, db, config);
     requireOwner(user);
     const { page, pageSize, offset } = getPagination(req.query);
-    const rows = db.prepare("select * from users where workspaceId = ? order by createdAt desc limit ? offset ?").all(DEFAULT_WORKSPACE.id, pageSize, offset) as UserRow[];
-    const total = db.prepare("select count(*) as count from users where workspaceId = ?").get(DEFAULT_WORKSPACE.id) as { count: number };
+    const query = parseUserListQuery(req.query);
+    const clauses = ["workspaceId = ?"];
+    const values: unknown[] = [DEFAULT_WORKSPACE.id];
+    if (query.role) { clauses.push("role = ?"); values.push(query.role); }
+    if (query.status) { clauses.push("status = ?"); values.push(query.status); }
+    if (query.q) { clauses.push("(username like ? escape '\\' or displayName like ? escape '\\')"); values.push(likePattern(query.q), likePattern(query.q)); }
+    const where = clauses.join(" and ");
+    const rows = db.prepare(`select * from users where ${where} order by createdAt desc limit ? offset ?`).all(...values, pageSize, offset) as UserRow[];
+    const total = db.prepare(`select count(*) as count from users where ${where}`).get(...values) as { count: number };
     return { success: true, data: rows.map(publicUser), pagination: { page, pageSize, total: total.count } };
   });
 
@@ -1166,8 +1248,13 @@ export async function buildApp(options: BuildAppOptions = {}) {
   app.get("/api/admin/registration-tokens", async (req) => {
     getSessionUser(req, db, config);
     const { page, pageSize, offset } = getPagination(req.query);
-    const rows = db.prepare("select * from registration_tokens where workspaceId = ? order by createdAt desc limit ? offset ?").all(DEFAULT_WORKSPACE.id, pageSize, offset) as RegistrationTokenRow[];
-    const total = db.prepare("select count(*) as count from registration_tokens where workspaceId = ?").get(DEFAULT_WORKSPACE.id) as { count: number };
+    const query = parseRegistrationTokenListQuery(req.query);
+    const clauses = ["workspaceId = ?"];
+    const values: unknown[] = [DEFAULT_WORKSPACE.id];
+    if (query.status) { clauses.push("status = ?"); values.push(query.status); }
+    const where = clauses.join(" and ");
+    const rows = db.prepare(`select * from registration_tokens where ${where} order by createdAt desc limit ? offset ?`).all(...values, pageSize, offset) as RegistrationTokenRow[];
+    const total = db.prepare(`select count(*) as count from registration_tokens where ${where}`).get(...values) as { count: number };
     return { success: true, data: rows.map(publicRegistrationToken), pagination: { page, pageSize, total: total.count } };
   });
 
@@ -1206,11 +1293,11 @@ export async function buildApp(options: BuildAppOptions = {}) {
   app.get("/api/admin/agents", async (req) => {
     getSessionUser(req, db, config);
     const { page, pageSize, offset } = getPagination(req.query);
-    const query = req.query as { status?: string; q?: string } | undefined;
+    const query = parseAgentListQuery(req.query);
     const clauses = ["workspaceId = ?"];
     const values: unknown[] = [DEFAULT_WORKSPACE.id];
-    if (query?.status) { clauses.push("status = ?"); values.push(query.status); }
-    if (query?.q) { clauses.push("(code like ? escape '\\' or name like ? escape '\\')"); values.push(likePattern(query.q), likePattern(query.q)); }
+    if (query.status) { clauses.push("status = ?"); values.push(query.status); }
+    if (query.q) { clauses.push("(code like ? escape '\\' or name like ? escape '\\')"); values.push(likePattern(query.q), likePattern(query.q)); }
     const where = clauses.join(" and ");
     const rows = db.prepare(`select * from agents where ${where} order by createdAt desc limit ? offset ?`).all(...values, pageSize, offset) as AgentRow[];
     const total = db.prepare(`select count(*) as count from agents where ${where}`).get(...values) as { count: number };
@@ -1273,12 +1360,13 @@ export async function buildApp(options: BuildAppOptions = {}) {
   app.get("/api/admin/capsule-services", async (req) => {
     getSessionUser(req, db, config);
     const { page, pageSize, offset } = getPagination(req.query);
-    const query = req.query as { status?: string; healthStatus?: string; q?: string } | undefined;
+    const query = parseServiceListQuery(req.query);
     const clauses = ["workspaceId = ?"];
     const values: unknown[] = [DEFAULT_WORKSPACE.id];
-    if (query?.status) { clauses.push("status = ?"); values.push(query.status); }
-    if (query?.healthStatus) { clauses.push("healthStatus = ?"); values.push(query.healthStatus); }
-    if (query?.q) { clauses.push("(code like ? escape '\\' or name like ? escape '\\')"); values.push(likePattern(query.q), likePattern(query.q)); }
+    if (query.status) { clauses.push("status = ?"); values.push(query.status); }
+    if (query.healthStatus) { clauses.push("healthStatus = ?"); values.push(query.healthStatus); }
+    if (query.agentId) { clauses.push("agentId = ?"); values.push(query.agentId); }
+    if (query.q) { clauses.push("(code like ? escape '\\' or name like ? escape '\\')"); values.push(likePattern(query.q), likePattern(query.q)); }
     const where = clauses.join(" and ");
     const rows = db.prepare(`select * from capsule_services where ${where} order by createdAt desc limit ? offset ?`).all(...values, pageSize, offset) as CapsuleServiceRow[];
     const total = db.prepare(`select count(*) as count from capsule_services where ${where}`).get(...values) as { count: number };
@@ -1467,16 +1555,8 @@ export async function buildApp(options: BuildAppOptions = {}) {
   app.get("/api/admin/audit-events", async (req) => {
     getSessionUser(req, db, config);
     const { page, pageSize, offset } = getPagination(req.query);
-    const query = req.query as { actorType?: string; result?: string; action?: string; targetType?: string } | undefined;
-    const clauses = ["workspaceId = ?"];
-    const values: unknown[] = [DEFAULT_WORKSPACE.id];
-    for (const [key, value] of Object.entries({ actorType: query?.actorType, result: query?.result, action: query?.action, targetType: query?.targetType })) {
-      if (value) {
-        clauses.push(`${key} = ?`);
-        values.push(value);
-      }
-    }
-    const where = clauses.join(" and ");
+    const query = parseAuditEventQuery(req.query);
+    const { where, values } = auditQueryWhere(query);
     const rows = db.prepare(`select * from audit_events where ${where} order by createdAt desc limit ? offset ?`).all(...values, pageSize, offset) as AuditEventRow[];
     const total = db.prepare(`select count(*) as count from audit_events where ${where}`).get(...values) as { count: number };
     return { success: true, data: rows.map(publicAuditEvent), pagination: { page, pageSize, total: total.count } };
@@ -1535,9 +1615,9 @@ export async function buildApp(options: BuildAppOptions = {}) {
   app.get("/api/admin/audit-events/export", async (req, reply) => {
     const { user } = getSessionUser(req, db, config);
     requireOperator(user);
-    const query = req.query as { actorType?: string; result?: string; action?: string; targetType?: string; format?: string } | undefined;
+    const query = parseAuditEventQuery(req.query);
     const rows = auditExportRows(db, query);
-    if (query?.format === "csv") {
+    if (query.format === "csv") {
       reply.header("content-disposition", `attachment; filename=opstage-audit-${Date.now()}.csv`);
       reply.type("text/csv; charset=utf-8");
       return auditRowsToCsv(rows);

@@ -75,6 +75,13 @@ describe("Phase 1 backend kernel", () => {
     expect(me.statusCode).toBe(200);
     expect(me.json().data.user.username).toBe(config.OPSTAGE_ADMIN_USERNAME);
 
+    const filteredUsers = await app.inject({ method: "GET", url: "/api/admin/users?role=owner&status=ACTIVE&q=admin", cookies: { opstage_session: cookie!.value } });
+    expect(filteredUsers.statusCode).toBe(200);
+    expect(filteredUsers.json().pagination.total).toBe(1);
+    const invalidUsers = await app.inject({ method: "GET", url: "/api/admin/users?role=root", cookies: { opstage_session: cookie!.value } });
+    expect(invalidUsers.statusCode).toBe(422);
+    expect(invalidUsers.json().error.code).toBe("VALIDATION_FAILED");
+
     const dashboard = await app.inject({
       method: "GET",
       url: "/api/admin/dashboard/summary",
@@ -198,6 +205,13 @@ describe("Phase 2 agent registration and service report", () => {
     });
     expect(heartbeat.statusCode).toBe(200);
 
+    const filteredTokens = await app.inject({ method: "GET", url: "/api/admin/registration-tokens?status=USED", cookies: { opstage_session: cookie.value } });
+    expect(filteredTokens.statusCode).toBe(200);
+    expect(filteredTokens.json().pagination.total).toBe(1);
+    const invalidTokenFilter = await app.inject({ method: "GET", url: "/api/admin/registration-tokens?status=BAD", cookies: { opstage_session: cookie.value } });
+    expect(invalidTokenFilter.statusCode).toBe(422);
+    expect(invalidTokenFilter.json().error.code).toBe("VALIDATION_FAILED");
+
     const agents = await app.inject({
       method: "GET",
       url: "/api/admin/agents",
@@ -211,6 +225,9 @@ describe("Phase 2 agent registration and service report", () => {
       cookies: { opstage_session: cookie.value }
     });
     expect(filteredAgents.json().pagination.total).toBe(1);
+    const invalidAgents = await app.inject({ method: "GET", url: "/api/admin/agents?status=BAD", cookies: { opstage_session: cookie.value } });
+    expect(invalidAgents.statusCode).toBe(422);
+    expect(invalidAgents.json().error.code).toBe("VALIDATION_FAILED");
 
     const services = await app.inject({
       method: "GET",
@@ -219,9 +236,11 @@ describe("Phase 2 agent registration and service report", () => {
     });
     expect(services.statusCode).toBe(200);
     expect(services.json().data[0].code).toBe("demo-capsule-service");
-    const filteredServices = await app.inject({ method: "GET", url: "/api/admin/capsule-services?healthStatus=UP&q=demo", cookies: { opstage_session: cookie.value } });
-    expect(filteredServices.json().pagination.total).toBe(1);
     const serviceId = services.json().data[0].id as string;
+    const filteredServices = await app.inject({ method: "GET", url: `/api/admin/capsule-services?healthStatus=UP&status=HEALTHY&agentId=${agentId}&q=demo`, cookies: { opstage_session: cookie.value } });
+    expect(filteredServices.json().pagination.total).toBe(1);
+    const invalidServices = await app.inject({ method: "GET", url: "/api/admin/capsule-services?healthStatus=BAD&agentId=bad", cookies: { opstage_session: cookie.value } });
+    expect(invalidServices.statusCode).toBe(422);
 
     const detail = await app.inject({
       method: "GET",
@@ -433,8 +452,15 @@ describe("Phase 3 command and action loop", () => {
     const auditEvents = await app.inject({ method: "GET", url: "/api/admin/audit-events?pageSize=5", cookies: { opstage_session: cookie.value } });
     expect(auditEvents.statusCode).toBe(200);
     expect(auditEvents.json().data.some((event: { action: string }) => event.action === "command.completed" || event.action === "command.failed")).toBe(true);
-    const filteredAuditEvents = await app.inject({ method: "GET", url: "/api/admin/audit-events?action=command.completed&actorType=AGENT", cookies: { opstage_session: cookie.value } });
+    const filteredAuditEvents = await app.inject({ method: "GET", url: "/api/admin/audit-events?action=command.completed&actorType=AGENT&result=SUCCESS&from=2000-01-01T00:00:00.000Z", cookies: { opstage_session: cookie.value } });
     expect(filteredAuditEvents.json().pagination.total).toBe(1);
+    const toBeforeEvents = await app.inject({ method: "GET", url: "/api/admin/audit-events?to=2000-01-01T00:00:00.000Z", cookies: { opstage_session: cookie.value } });
+    expect(toBeforeEvents.json().pagination.total).toBe(0);
+    const invalidAuditFilter = await app.inject({ method: "GET", url: "/api/admin/audit-events?actorType=BOT", cookies: { opstage_session: cookie.value } });
+    expect(invalidAuditFilter.statusCode).toBe(422);
+    expect(invalidAuditFilter.json().error.code).toBe("VALIDATION_FAILED");
+    const invalidAuditRange = await app.inject({ method: "GET", url: "/api/admin/audit-events?from=2026-01-02T00:00:00.000Z&to=2026-01-01T00:00:00.000Z", cookies: { opstage_session: cookie.value } });
+    expect(invalidAuditRange.statusCode).toBe(422);
     expect(JSON.stringify(auditEvents.json())).not.toContain("opstage_agent_");
     await app.close();
   });
