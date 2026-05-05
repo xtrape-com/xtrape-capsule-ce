@@ -438,7 +438,7 @@ function getPathValue(row: Record<string, unknown>, path: string): unknown {
   return path.split(".").reduce<unknown>((value, part) => value && typeof value === "object" ? (value as Record<string, unknown>)[part] : undefined, row);
 }
 
-function resolveRowPayload(template: Record<string, unknown> | undefined, row: Record<string, unknown>): Record<string, unknown> {
+export function resolveRowPayload(template: Record<string, unknown> | undefined, row: Record<string, unknown>): Record<string, unknown> {
   const resolve = (value: unknown): unknown => {
     if (typeof value === "string" && value.startsWith("$row.")) return getPathValue(row, value.slice(5));
     if (Array.isArray(value)) return value.map(resolve);
@@ -448,7 +448,7 @@ function resolveRowPayload(template: Record<string, unknown> | undefined, row: R
   return resolve(template ?? {}) as Record<string, unknown>;
 }
 
-function formatDurationMs(value: unknown): string {
+export function formatDurationMs(value: unknown): string {
   const ms = Number(value);
   if (!Number.isFinite(ms)) return "-";
   if (Math.abs(ms) < 1000) return `${ms}ms`;
@@ -460,7 +460,7 @@ function formatDurationMs(value: unknown): string {
   return `${hours.toFixed(hours < 10 ? 1 : 0)}h`;
 }
 
-function formatBytes(value: unknown): string {
+export function formatBytes(value: unknown): string {
   const bytes = Number(value);
   if (!Number.isFinite(bytes)) return "-";
   const units = ["B", "KB", "MB", "GB", "TB"];
@@ -474,7 +474,7 @@ function formatBytes(value: unknown): string {
   return `${signed.toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
 }
 
-function formatRelativeTime(value: unknown): string {
+export function formatRelativeTime(value: unknown): string {
   const timestamp = typeof value === "number" ? value : Date.parse(String(value ?? ""));
   if (!Number.isFinite(timestamp)) return "-";
   const diffMs = Date.now() - timestamp;
@@ -486,7 +486,7 @@ function formatRelativeTime(value: unknown): string {
   return `${Math.round(abs / 86_400_000)}d ${suffix}`;
 }
 
-function renderListCell(value: unknown, column: ResultListColumn) {
+export function renderListCell(value: unknown, column: ResultListColumn) {
   if (column.format === "status") return <StatusTag value={value === true ? "TRUE" : value === false ? "FALSE" : String(value ?? "")} />;
   if (column.format === "boolean") return <Tag color={value ? "green" : "default"}>{value ? "YES" : "NO"}</Tag>;
   if (column.format === "datetime") return value ? String(value) : "-";
@@ -502,7 +502,7 @@ function renderListCell(value: unknown, column: ResultListColumn) {
   return column.copyable && text !== "-" ? <Typography.Text copyable={{ text }}>{node}</Typography.Text> : node;
 }
 
-function resultRowKey(row: Record<string, unknown>, index?: number): string {
+export function resultRowKey(row: Record<string, unknown>, index?: number): string {
   return String(row.id ?? row.key ?? row.name ?? index ?? JSON.stringify(row));
 }
 

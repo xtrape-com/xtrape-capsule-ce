@@ -472,6 +472,51 @@ describe("Phase 3 command and action loop", () => {
     db.close();
   });
 
+  it("clamps invalid agent command poll limits", async () => {
+    const db = openDatabase({ databaseUrl: ":memory:" });
+    const { app, cookie, csrfToken, agentId, agentToken, serviceId } = await setupRegisteredService(db);
+    const createCommand = async (message: string) => {
+      const create = await app.inject({
+        method: "POST",
+        url: `/api/admin/capsule-services/${serviceId}/actions/echo`,
+        cookies: { opstage_session: cookie.value },
+        headers: { "x-csrf-token": csrfToken },
+        payload: { payload: { message } }
+      });
+      expect(create.statusCode).toBe(200);
+      return create.json().data.id as string;
+    };
+
+    const first = await createCommand("zero-limit");
+    const zeroLimitPoll = await app.inject({
+      method: "GET",
+      url: `/api/agents/${agentId}/commands?limit=0`,
+      headers: { authorization: `Bearer ${agentToken}` }
+    });
+    expect(zeroLimitPoll.statusCode).toBe(200);
+    expect(zeroLimitPoll.json().data.map((item: { id: string }) => item.id)).toEqual([first]);
+
+    for (let i = 0; i < 12; i += 1) await createCommand(`large-limit-${i}`);
+    const largeLimitPoll = await app.inject({
+      method: "GET",
+      url: `/api/agents/${agentId}/commands?limit=99`,
+      headers: { authorization: `Bearer ${agentToken}` }
+    });
+    expect(largeLimitPoll.statusCode).toBe(200);
+    expect(largeLimitPoll.json().data).toHaveLength(10);
+
+    const invalidLimitPoll = await app.inject({
+      method: "GET",
+      url: `/api/agents/${agentId}/commands?limit=abc`,
+      headers: { authorization: `Bearer ${agentToken}` }
+    });
+    expect(invalidLimitPoll.statusCode).toBe(200);
+    expect(invalidLimitPoll.json().data).toHaveLength(2);
+
+    await app.close();
+    db.close();
+  });
+
   it("returns prepare command details when action prepare fails", async () => {
     const db = openDatabase({ databaseUrl: ":memory:" });
     const { app, cookie, agentId, agentToken, serviceId } = await setupRegisteredService(db);
