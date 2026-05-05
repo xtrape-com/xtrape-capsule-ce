@@ -38,6 +38,17 @@ function queryString(params: Record<string, string | number | undefined | null>)
   return text ? `?${text}` : "";
 }
 
+function searchFilters<T extends Record<string, string | undefined>>(search: string, keys: Array<keyof T>, defaults: T): T {
+  const params = new URLSearchParams(search);
+  const values: Record<string, string | undefined> = { ...defaults };
+  for (const key of keys) values[String(key)] = params.get(String(key)) || undefined;
+  return values as T;
+}
+
+function sameFilters(left: Record<string, unknown>, right: Record<string, unknown>) {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
 
 function useQueryData<T>(loader: () => Promise<T>, deps: React.DependencyList = [], refreshMs?: number) {
   const queryId = React.useId();
@@ -255,13 +266,25 @@ function CreateTokenForm({ onCreated }: { onCreated: (token: RegistrationToken) 
 
 function Agents() {
   const { t } = useI18n();
+  const location = useLocation();
   const navigate = useNavigate();
-  const [filters, setFilters] = React.useState<{ q?: string; status?: string }>({});
+  const [filters, setFilters] = React.useState<{ q?: string; status?: string }>(() => searchFilters<{ q?: string; status?: string }>(location.search, ["q", "status"], {}));
+  const [qDraft, setQDraft] = React.useState(filters.q ?? "");
   const [page, setPage] = React.useState<PageState>(defaultPage);
-  const updateFilters = (next: { q?: string; status?: string }) => { setFilters(next); setPage(defaultPage); };
+  const updateFilters = (next: { q?: string; status?: string }) => {
+    setFilters(next);
+    setPage(defaultPage);
+    navigate(`${location.pathname}${queryString(next)}`, { replace: true });
+  };
   const { data, loading, reload } = useQueryData(() => apiList<Agent>(`/api/admin/agents${queryString({ ...filters, ...page })}`), [filters.q, filters.status, page.page, page.pageSize]);
   const [selected, setSelected] = React.useState<Agent | null>(null);
   const [refreshing, setRefreshing] = React.useState(false);
+  React.useEffect(() => {
+    const next = searchFilters<{ q?: string; status?: string }>(location.search, ["q", "status"], {});
+    setFilters(current => sameFilters(current, next) ? current : next);
+    setQDraft(next.q ?? "");
+    setPage(defaultPage);
+  }, [location.search]);
   const openAgent = async (id: string) => setSelected(await apiFetch<Agent>(`/api/admin/agents/${id}`));
   const refreshAgents = async () => {
     setRefreshing(true);
@@ -278,9 +301,9 @@ function Agents() {
   const openAgentServices = (agentId: string) => navigate(`/services?agentId=${encodeURIComponent(agentId)}`);
   return <Card title={t("menu.agents")} extra={<Button loading={refreshing} onClick={() => void refreshAgents()}>{t("action.refresh")}</Button>}>
     <Space style={{ marginBottom: 16 }} wrap>
-      <Input.Search placeholder={t("common.searchCodeName")} allowClear onSearch={(q) => updateFilters({ ...filters, q })} style={{ width: 240 }} />
-      <Select allowClear placeholder={t("common.status")} style={{ width: 160 }} onChange={(status) => updateFilters({ ...filters, status })} options={["PENDING", "ONLINE", "OFFLINE", "DISABLED", "REVOKED"].map(value => ({ value, label: value }))} />
-      <Button onClick={() => updateFilters({})}>{t("agent.resetFilters")}</Button>
+      <Input.Search placeholder={t("common.searchCodeName")} allowClear value={qDraft} onChange={(event) => setQDraft(event.target.value)} onSearch={(q) => updateFilters({ ...filters, q })} style={{ width: 240 }} />
+      <Select allowClear placeholder={t("common.status")} style={{ width: 160 }} value={filters.status} onChange={(status) => updateFilters({ ...filters, status })} options={["PENDING", "ONLINE", "OFFLINE", "DISABLED", "REVOKED"].map(value => ({ value, label: value }))} />
+      <Button onClick={() => { setQDraft(""); updateFilters({}); }}>{t("agent.resetFilters")}</Button>
     </Space>
     <Table rowKey="id" loading={loading} dataSource={data?.data ?? []} scroll={{ x: 1200 }} pagination={{ current: data?.pagination?.page ?? page.page, pageSize: data?.pagination?.pageSize ?? page.pageSize, total: data?.pagination?.total, showSizeChanger: true, onChange: (nextPage, nextPageSize) => setPage({ page: nextPage, pageSize: nextPageSize }) }} onRow={(row) => ({ onClick: () => void openAgent(row.id) })} columns={[
       { title: t("common.id"), dataIndex: "id", render: (v) => <Typography.Text code copyable>{String(v)}</Typography.Text> }, { title: t("common.code"), dataIndex: "code" }, { title: t("common.name"), dataIndex: "name" }, { title: t("common.mode"), dataIndex: "mode" }, { title: t("common.runtime"), dataIndex: "runtime" }, { title: t("common.status"), dataIndex: "status", render: (v) => <StatusTag value={v} /> }, { title: "Heartbeat", dataIndex: "lastHeartbeatAt" },
@@ -877,25 +900,40 @@ function accountStatusesFromHealth(health: Record<string, unknown> | null | unde
 
 function Commands() {
   const { t } = useI18n();
-  const [filters, setFilters] = React.useState<{ status?: string; type?: string; actionName?: string; agentId?: string; serviceId?: string }>({ type: "ACTION_EXECUTE" });
-  const [idFilters, setIdFilters] = React.useState<{ agentId?: string; serviceId?: string }>({});
+  const location = useLocation();
+  const navigate = useNavigate();
+  type CommandFilters = { status?: string; type?: string; actionName?: string; agentId?: string; serviceId?: string };
+  const [filters, setFilters] = React.useState<CommandFilters>(() => searchFilters<CommandFilters>(location.search, ["status", "type", "actionName", "agentId", "serviceId"], { type: "ACTION_EXECUTE" }));
+  const [actionNameDraft, setActionNameDraft] = React.useState(filters.actionName ?? "");
+  const [idFilters, setIdFilters] = React.useState<{ agentId?: string; serviceId?: string }>({ agentId: filters.agentId, serviceId: filters.serviceId });
   const [page, setPage] = React.useState<PageState>(defaultPage);
-  const updateFilters = (next: { status?: string; type?: string; actionName?: string; agentId?: string; serviceId?: string }) => { setFilters(next); setPage(defaultPage); };
+  const updateFilters = (next: CommandFilters) => {
+    setFilters(next);
+    setPage(defaultPage);
+    navigate(`${location.pathname}${queryString(next)}`, { replace: true });
+  };
   const { data, loading, reload } = useQueryData(() => apiList<Command>(`/api/admin/commands${queryString({ ...filters, ...page })}`), [filters.status, filters.type, filters.actionName, filters.agentId, filters.serviceId, page.page, page.pageSize], 5000);
   const [selected, setSelected] = React.useState<Command | null>(null);
   const openCommand = async (id: string) => setSelected(await apiFetch<Command>(`/api/admin/commands/${id}`));
   const commandHint = filters.type === "ACTION_EXECUTE" ? t("command.defaultFilterHint") : filters.type ? t("command.filteredTypeHint", { type: filters.type }) : t("command.allTypesHint");
+  React.useEffect(() => {
+    const next = searchFilters<CommandFilters>(location.search, ["status", "type", "actionName", "agentId", "serviceId"], { type: "ACTION_EXECUTE" });
+    setFilters(current => sameFilters(current, next) ? current : next);
+    setActionNameDraft(next.actionName ?? "");
+    setIdFilters({ agentId: next.agentId, serviceId: next.serviceId });
+    setPage(defaultPage);
+  }, [location.search]);
   return <Card title={t("command.title")} extra={<Button onClick={reload}>{t("action.refresh")}</Button>}>
     <Alert type="info" showIcon style={{ marginBottom: 16 }} message={commandHint} />
     <Space style={{ marginBottom: 16 }} wrap>
-      <Input.Search placeholder={t("command.actionName")} allowClear onSearch={(actionName) => updateFilters({ ...filters, actionName })} style={{ width: 220 }} />
+      <Input.Search placeholder={t("command.actionName")} allowClear value={actionNameDraft} onChange={(event) => setActionNameDraft(event.target.value)} onSearch={(actionName) => updateFilters({ ...filters, actionName })} style={{ width: 220 }} />
       <Select allowClear placeholder={t("command.type")} style={{ width: 180 }} value={filters.type} onChange={(type) => updateFilters({ ...filters, type })} options={["ACTION_EXECUTE", "ACTION_PREPARE"].map(value => ({ value, label: value }))} />
-      <Select allowClear placeholder={t("common.status")} style={{ width: 180 }} onChange={(status) => updateFilters({ ...filters, status })} options={["PENDING", "RUNNING", "SUCCEEDED", "FAILED", "CANCELLED", "EXPIRED"].map(value => ({ value, label: value }))} />
+      <Select allowClear placeholder={t("common.status")} style={{ width: 180 }} value={filters.status} onChange={(status) => updateFilters({ ...filters, status })} options={["PENDING", "RUNNING", "SUCCEEDED", "FAILED", "CANCELLED", "EXPIRED"].map(value => ({ value, label: value }))} />
       <Input placeholder={t("command.agentId")} allowClear value={idFilters.agentId} onChange={(event) => setIdFilters({ ...idFilters, agentId: event.target.value })} style={{ width: 220 }} />
       <Input placeholder={t("command.serviceId")} allowClear value={idFilters.serviceId} onChange={(event) => setIdFilters({ ...idFilters, serviceId: event.target.value })} style={{ width: 220 }} />
       <Button onClick={() => updateFilters({ ...filters, agentId: idFilters.agentId, serviceId: idFilters.serviceId })}>{t("command.applyIdFilters")}</Button>
       <Button onClick={() => updateFilters({ ...filters, type: undefined })}>{t("command.showAllTypes")}</Button>
-      <Button onClick={() => { setIdFilters({}); updateFilters({ type: "ACTION_EXECUTE" }); }}>{t("command.resetFilters")}</Button>
+      <Button onClick={() => { setActionNameDraft(""); setIdFilters({}); updateFilters({ type: "ACTION_EXECUTE" }); }}>{t("command.resetFilters")}</Button>
     </Space>
     <Table rowKey="id" loading={loading} dataSource={data?.data ?? []} scroll={{ x: 1400 }} pagination={{ current: data?.pagination?.page ?? page.page, pageSize: data?.pagination?.pageSize ?? page.pageSize, total: data?.pagination?.total, showSizeChanger: true, onChange: (nextPage, nextPageSize) => setPage({ page: nextPage, pageSize: nextPageSize }) }} onRow={(row) => ({ onClick: () => void openCommand(row.id) })} columns={[
       { title: t("common.id"), dataIndex: "id", render: (v) => <Typography.Text code copyable>{String(v)}</Typography.Text> },
@@ -930,23 +968,40 @@ function Commands() {
 
 function AuditEvents() {
   const { t } = useI18n();
-  const [filters, setFilters] = React.useState<{ actorType?: string; result?: string; action?: string; targetType?: string; from?: string; to?: string }>({});
-  const [draftRange, setDraftRange] = React.useState<{ from?: string; to?: string }>({});
+  const location = useLocation();
+  const navigate = useNavigate();
+  type AuditFilters = { actorType?: string; result?: string; action?: string; targetType?: string; from?: string; to?: string };
+  const [filters, setFilters] = React.useState<AuditFilters>(() => searchFilters<AuditFilters>(location.search, ["actorType", "result", "action", "targetType", "from", "to"], {}));
+  const [actionDraft, setActionDraft] = React.useState(filters.action ?? "");
+  const [targetTypeDraft, setTargetTypeDraft] = React.useState(filters.targetType ?? "");
+  const [draftRange, setDraftRange] = React.useState<{ from?: string; to?: string }>({ from: filters.from, to: filters.to });
   const [page, setPage] = React.useState<PageState>(defaultPage);
-  const updateFilters = (next: { actorType?: string; result?: string; action?: string; targetType?: string; from?: string; to?: string }) => { setFilters(next); setPage(defaultPage); };
+  const updateFilters = (next: AuditFilters) => {
+    setFilters(next);
+    setPage(defaultPage);
+    navigate(`${location.pathname}${queryString(next)}`, { replace: true });
+  };
   const auditQuery = queryString({ ...filters, ...page });
   const exportCsvQuery = queryString({ ...filters, format: "csv" });
   const { data, loading, reload } = useQueryData(() => apiList<AuditEvent>(`/api/admin/audit-events${auditQuery}`), [filters.actorType, filters.result, filters.action, filters.targetType, filters.from, filters.to, page.page, page.pageSize], 5000);
+  React.useEffect(() => {
+    const next = searchFilters<AuditFilters>(location.search, ["actorType", "result", "action", "targetType", "from", "to"], {});
+    setFilters(current => sameFilters(current, next) ? current : next);
+    setActionDraft(next.action ?? "");
+    setTargetTypeDraft(next.targetType ?? "");
+    setDraftRange({ from: next.from, to: next.to });
+    setPage(defaultPage);
+  }, [location.search]);
   return <Card title={t("audit.title")} extra={<Space><Button onClick={() => void downloadBlob(`/api/admin/audit-events/export${exportCsvQuery}`, "audit-events.csv")}>{t("action.exportCsv")}</Button><Button onClick={reload}>{t("action.refresh")}</Button></Space>}>
     <Space style={{ marginBottom: 16 }} wrap>
-      <Input.Search placeholder="Action" allowClear onSearch={(action) => updateFilters({ ...filters, action })} style={{ width: 220 }} />
-      <Select allowClear placeholder="Actor" style={{ width: 140 }} onChange={(actorType) => updateFilters({ ...filters, actorType })} options={["USER", "AGENT", "SYSTEM"].map(value => ({ value, label: value }))} />
-      <Select allowClear placeholder="Result" style={{ width: 140 }} onChange={(result) => updateFilters({ ...filters, result })} options={["SUCCESS", "FAILURE"].map(value => ({ value, label: value }))} />
-      <Input placeholder={t("audit.targetType")} allowClear onChange={(event) => updateFilters({ ...filters, targetType: event.target.value })} style={{ width: 180 }} />
+      <Input.Search placeholder="Action" allowClear value={actionDraft} onChange={(event) => setActionDraft(event.target.value)} onSearch={(action) => updateFilters({ ...filters, action })} style={{ width: 220 }} />
+      <Select allowClear placeholder="Actor" style={{ width: 140 }} value={filters.actorType} onChange={(actorType) => updateFilters({ ...filters, actorType })} options={["USER", "AGENT", "SYSTEM"].map(value => ({ value, label: value }))} />
+      <Select allowClear placeholder="Result" style={{ width: 140 }} value={filters.result} onChange={(result) => updateFilters({ ...filters, result })} options={["SUCCESS", "FAILURE"].map(value => ({ value, label: value }))} />
+      <Input.Search placeholder={t("audit.targetType")} allowClear value={targetTypeDraft} onChange={(event) => setTargetTypeDraft(event.target.value)} onSearch={(targetType) => updateFilters({ ...filters, targetType })} style={{ width: 180 }} />
       <Input placeholder={t("audit.fromPlaceholder")} allowClear value={draftRange.from} onChange={(event) => setDraftRange({ ...draftRange, from: event.target.value })} style={{ width: 260 }} />
       <Input placeholder={t("audit.toPlaceholder")} allowClear value={draftRange.to} onChange={(event) => setDraftRange({ ...draftRange, to: event.target.value })} style={{ width: 260 }} />
       <Button onClick={() => updateFilters({ ...filters, from: draftRange.from, to: draftRange.to })}>{t("audit.applyTimeRange")}</Button>
-      <Button onClick={() => { setDraftRange({}); updateFilters({}); }}>{t("audit.resetFilters")}</Button>
+      <Button onClick={() => { setActionDraft(""); setTargetTypeDraft(""); setDraftRange({}); updateFilters({}); }}>{t("audit.resetFilters")}</Button>
     </Space>
     <Table rowKey="id" loading={loading} dataSource={data?.data ?? []} pagination={{ current: data?.pagination?.page ?? page.page, pageSize: data?.pagination?.pageSize ?? page.pageSize, total: data?.pagination?.total, showSizeChanger: true, onChange: (nextPage, nextPageSize) => setPage({ page: nextPage, pageSize: nextPageSize }) }} columns={[{ title: t("common.time"), dataIndex: "createdAt" }, { title: t("common.actor"), dataIndex: "actorType" }, { title: "Action", dataIndex: "action" }, { title: t("audit.targetType"), dataIndex: "targetType" }, { title: t("common.result"), dataIndex: "result", render: (v) => <StatusTag value={String(v)} /> }, { title: t("common.message"), dataIndex: "message" }]} />
   </Card>;
