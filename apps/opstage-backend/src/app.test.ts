@@ -296,8 +296,8 @@ describe("Phase 2 agent registration and service report", () => {
 });
 
 describe("Phase 3 command and action loop", () => {
-  async function setupRegisteredService() {
-    const app = await buildApp({ logger: false, config });
+  async function setupRegisteredService(db?: ReturnType<typeof openDatabase>) {
+    const app = await buildApp({ logger: false, config, ...(db ? { db } : {}) });
     const login = await app.inject({
       method: "POST",
       url: "/api/admin/auth/login",
@@ -340,6 +340,27 @@ describe("Phase 3 command and action loop", () => {
     return { app, cookie, csrfToken, agentId, agentToken, serviceId };
   }
 
+
+
+  it("treats command polling as lightweight heartbeat", async () => {
+    const db = openDatabase({ databaseUrl: ":memory:" });
+    const { app, agentId, agentToken } = await setupRegisteredService(db);
+    db.prepare("update agents set status = 'OFFLINE', lastHeartbeatAt = ? where id = ?").run("2000-01-01T00:00:00.000Z", agentId);
+
+    const poll = await app.inject({
+      method: "GET",
+      url: `/api/agents/${agentId}/commands`,
+      headers: { authorization: `Bearer ${agentToken}` }
+    });
+
+    expect(poll.statusCode).toBe(200);
+    const row = db.prepare("select status, lastHeartbeatAt from agents where id = ?").get(agentId) as { status: string; lastHeartbeatAt: string };
+    expect(row.status).toBe("ONLINE");
+    expect(Date.parse(row.lastHeartbeatAt)).toBeGreaterThan(Date.parse("2000-01-01T00:00:00.000Z"));
+    await app.close();
+    db.close();
+  });
+
   it("creates command, agent polls it, and reports success result", async () => {
     const { app, cookie, csrfToken, agentId, agentToken, serviceId } = await setupRegisteredService();
     const create = await app.inject({
@@ -366,7 +387,7 @@ describe("Phase 3 command and action loop", () => {
       method: "POST",
       url: `/api/agents/${agentId}/commands/${commandId}/result`,
       headers: { authorization: `Bearer ${agentToken}` },
-      payload: { success: true, message: "done", data: { echoed: true } }
+      payload: { success: true, message: "done", data: { echoed: true, generatedKey: "capi_one_time_secret" } }
     });
     expect(result.statusCode).toBe(200);
     expect(result.json().data.success).toBe(true);
@@ -381,6 +402,15 @@ describe("Phase 3 command and action loop", () => {
     expect(detail.json().data.payload.password).toBe("[REDACTED]");
     expect(JSON.stringify(detail.json())).not.toContain("agent-secret-value");
     expect(detail.json().data.result.data.echoed).toBe(true);
+    expect(detail.json().data.result.data.generatedKey).toBe("capi_one_time_secret");
+
+    const detailAfterSecretConsumed = await app.inject({
+      method: "GET",
+      url: `/api/admin/commands/${commandId}`,
+      cookies: { opstage_session: cookie.value }
+    });
+    expect(JSON.stringify(detailAfterSecretConsumed.json())).not.toContain("capi_one_time_secret");
+    expect(detailAfterSecretConsumed.json().data.result.data.generatedKey).toBe("[REDACTED]");
 
     const list = await app.inject({ method: "GET", url: "/api/admin/commands", cookies: { opstage_session: cookie.value } });
     expect(list.statusCode).toBe(200);
@@ -573,11 +603,11 @@ describe("Phase 11 maintenance tasks", () => {
       service: { code: "stale-service", name: "Stale Service", manifest: {}, health: { status: "UP" }, configs: [], actions: [{ name: "slow", label: "Slow", dangerLevel: "LOW", timeoutSeconds: 60 }] }
     } });
     const agentId = registerRes.json().data.agentId as string;
-    db.prepare("update agents set lastHeartbeatAt = ? where id = ?").run("2000-01-01T00:00:00.000Z", agentId);
     const services = await app.inject({ method: "GET", url: "/api/admin/capsule-services", cookies: { opstage_session: cookie.value } });
     const serviceId = services.json().data[0].id as string;
     const command = await app.inject({ method: "POST", url: `/api/admin/capsule-services/${serviceId}/actions/slow`, cookies: { opstage_session: cookie.value }, headers: { "x-csrf-token": csrfToken }, payload: { payload: {} } });
     db.prepare("update commands set expiresAt = ? where id = ?").run("2000-01-01T00:00:00.000Z", command.json().data.id);
+    db.prepare("update agents set lastHeartbeatAt = ? where id = ?").run("2000-01-01T00:00:00.000Z", agentId);
 
     db.prepare("insert into audit_events (id, workspaceId, actorType, action, result, createdAt) values (?, ?, 'SYSTEM', 'OLD_EVENT', 'SUCCESS', ?)").run("aud_old", DEFAULT_WORKSPACE.id, "2000-01-01T00:00:00.000Z");
 

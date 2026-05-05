@@ -1,4 +1,4 @@
-import { App as AntApp, Badge, Button, Card, Descriptions, Drawer, Form, Input, InputNumber, Layout, Menu, Modal, Popconfirm, Select, Space, Statistic, Switch, Table, Tag, Typography, message } from "antd";
+import { App as AntApp, Alert, Badge, Button, Card, Collapse, Descriptions, Drawer, Form, Input, InputNumber, Layout, Menu, Modal, Popconfirm, Select, Space, Spin, Statistic, Switch, Table, Tag, Typography, message } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { useQuery } from "@tanstack/react-query";
 import React from "react";
@@ -13,6 +13,9 @@ interface Action { id: string; serviceId: string; name: string; label: string; d
 interface ActionPrepare { action: Action; initialPayload: Record<string, unknown>; currentState?: Record<string, unknown> }
 interface ConfigItem { id: string; configKey: string; label?: string | null; type: string; source?: string | null; editable: number; sensitive: number; valuePreview?: string | null; defaultValue?: string | null; secretRef?: string | null }
 interface Command { id: string; agentId: string; serviceId: string; type: string; actionName: string; status: string; payload: Record<string, unknown>; errorCode?: string | null; errorMessage?: string | null; createdAt: string; updatedAt: string; startedAt?: string | null; completedAt?: string | null; result?: Record<string, unknown> | null }
+interface ResultListColumn { key: string; label?: string; format?: "text" | "status" | "datetime" | "boolean" | "code"; copyable?: boolean }
+interface ResultListRowAction { label: string; action: string; payload?: Record<string, unknown>; danger?: boolean; confirm?: boolean }
+interface ResultListMeta { title?: string; data?: Record<string, unknown>[]; columns?: ResultListColumn[]; rowActions?: ResultListRowAction[] }
 interface AccountStatus { id?: string; label?: string; emailMasked?: string; enabled?: boolean; healthy?: boolean; operationStatus?: string; operationName?: string; operationMessage?: string; cooldownRemainingMs?: number; consecutiveFailures?: number; loginVerifiedAt?: number; lastError?: string }
 interface User { id: string; username: string; displayName?: string | null; role: string; status: string; lastLoginAt?: string | null; createdAt: string; updatedAt: string }
 interface AuditEvent { id: string; actorType: string; actorId?: string | null; action: string; targetType?: string | null; targetId?: string | null; result: string; message?: string | null; metadata: Record<string, unknown>; createdAt: string }
@@ -308,7 +311,7 @@ function Services() {
 }
 
 
-const actionCategoryOrder = ["account", "session", "runtime-config", "diagnostics", "advanced", "other"];
+const actionCategoryOrder = ["account", "api-key", "session", "runtime-config", "diagnostics", "advanced", "other"];
 
 function actionCategoryLabel(category: string, t: (key: never, vars?: Record<string, string | number>) => string) {
   const key = `actionCategory.${category}`;
@@ -369,7 +372,15 @@ function SchemaPayloadFields({ action, initialPayload, setPayload }: { action: A
     setPayload(JSON.stringify(defaults, null, 2));
   }, [action, form, initialPayload, setPayload]);
   if (Object.keys(properties).length === 0) return null;
-  return <Form form={form} layout="vertical" onValuesChange={(_, values) => setPayload(JSON.stringify(values, null, 2))}>
+  return <Form
+    form={form}
+    layout="horizontal"
+    labelCol={{ flex: "220px" }}
+    wrapperCol={{ flex: 1 }}
+    labelAlign="left"
+    colon={false}
+    onValuesChange={(_, values) => setPayload(JSON.stringify(values, null, 2))}
+  >
     {Object.entries(properties).map(([name, property]) => {
       const typeLabel = Array.isArray(property.type) ? property.type.join(" | ") : property.type ?? "string";
       const label = property.title && property.title !== name ? `${property.title} (${name})` : name;
@@ -399,6 +410,77 @@ function SchemaPayloadFields({ action, initialPayload, setPayload }: { action: A
   </Form>;
 }
 
+function actionResultData(command: Command | null): Record<string, unknown> | undefined {
+  const result = command?.result;
+  const data = result && typeof result === "object" && !Array.isArray(result) ? (result as Record<string, unknown>).data : undefined;
+  return data && typeof data === "object" && !Array.isArray(data) ? data as Record<string, unknown> : undefined;
+}
+
+function resultListFromCommand(command: Command | null): ResultListMeta | undefined {
+  const list = actionResultData(command)?.list;
+  if (!list || typeof list !== "object" || Array.isArray(list)) return undefined;
+  const meta = list as ResultListMeta;
+  return Array.isArray(meta.data) ? meta : undefined;
+}
+
+function inferListColumns(rows: Record<string, unknown>[]): ResultListColumn[] {
+  const first = rows[0];
+  if (!first) return [];
+  return Object.keys(first).slice(0, 8).map((key) => ({ key, label: key }));
+}
+
+function getPathValue(row: Record<string, unknown>, path: string): unknown {
+  return path.split(".").reduce<unknown>((value, part) => value && typeof value === "object" ? (value as Record<string, unknown>)[part] : undefined, row);
+}
+
+function resolveRowPayload(template: Record<string, unknown> | undefined, row: Record<string, unknown>): Record<string, unknown> {
+  const resolve = (value: unknown): unknown => {
+    if (typeof value === "string" && value.startsWith("$row.")) return getPathValue(row, value.slice(5));
+    if (Array.isArray(value)) return value.map(resolve);
+    if (value && typeof value === "object") return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, nested]) => [key, resolve(nested)]));
+    return value;
+  };
+  return resolve(template ?? {}) as Record<string, unknown>;
+}
+
+function renderListCell(value: unknown, column: ResultListColumn) {
+  if (column.format === "status") return <StatusTag value={value === true ? "TRUE" : value === false ? "FALSE" : String(value ?? "")} />;
+  if (column.format === "boolean") return <Tag color={value ? "green" : "default"}>{value ? "YES" : "NO"}</Tag>;
+  if (column.format === "datetime") return value ? String(value) : "-";
+  const text = value === undefined || value === null || value === "" ? "-" : typeof value === "object" ? JSON.stringify(value) : String(value);
+  const node = column.format === "code" ? <Typography.Text code>{text}</Typography.Text> : <Typography.Text>{text}</Typography.Text>;
+  return column.copyable && text !== "-" ? <Typography.Text copyable={{ text }}>{node}</Typography.Text> : node;
+}
+
+function ActionResultList({ command, service, onRunAction }: { command: Command | null; service: Service | null; onRunAction: (actionName: string, payload: Record<string, unknown>, confirmation?: boolean) => Promise<void> }) {
+  const { t } = useI18n();
+  const list = resultListFromCommand(command);
+  if (!list) return null;
+  const rows = list.data ?? [];
+  const columns = list.columns?.length ? list.columns : inferListColumns(rows);
+  const tableColumns: ColumnsType<Record<string, unknown>> = columns.map((column) => ({
+    title: column.label ?? column.key,
+    dataIndex: column.key,
+    render: (_value, row) => renderListCell(getPathValue(row, column.key), column),
+  }));
+  if (list.rowActions?.length) {
+    tableColumns.push({
+      title: t("common.actions"),
+      render: (_value, row) => <Space wrap>{list.rowActions!.map((rowAction) => {
+        const targetAction = service?.actions?.find((item) => item.name === rowAction.action);
+        const needsConfirm = Boolean(rowAction.confirm || targetAction?.requiresConfirmation);
+        const button = <Button size="small" danger={rowAction.danger || targetAction?.requiresConfirmation} disabled={!targetAction} onClick={() => !needsConfirm && void onRunAction(rowAction.action, resolveRowPayload(rowAction.payload, row), false)}>{rowAction.label}</Button>;
+        return needsConfirm
+          ? <Popconfirm key={`${rowAction.action}-${rowAction.label}`} title={t("confirm.runRowAction", { label: rowAction.label })} onConfirm={() => void onRunAction(rowAction.action, resolveRowPayload(rowAction.payload, row), true)}>{button}</Popconfirm>
+          : <span key={`${rowAction.action}-${rowAction.label}`}>{button}</span>;
+      })}</Space>,
+    });
+  }
+  return <Card size="small" title={list.title ?? "List"} style={{ marginTop: 16 }}>
+    <Table size="small" rowKey={(row, index) => String(row.id ?? row.key ?? index)} pagination={rows.length > 10 ? { pageSize: 10 } : false} dataSource={rows} columns={tableColumns} />
+  </Card>;
+}
+
 function ServiceDrawer({ service, refreshing, onClose, onRefresh, onCommandCreated }: { service: Service | null; refreshing?: boolean; onClose: () => void; onRefresh: () => void; onCommandCreated: () => void }) {
   const { t } = useI18n();
   const [action, setAction] = React.useState<Action | null>(null);
@@ -407,17 +489,16 @@ function ServiceDrawer({ service, refreshing, onClose, onRefresh, onCommandCreat
   const [commandResult, setCommandResult] = React.useState<Command | null>(null);
   const [commandRunning, setCommandRunning] = React.useState(false);
   const [prepareLoading, setPrepareLoading] = React.useState(false);
-  const submitAction = async () => {
-    if (!service || !action) return;
-    let parsed: Record<string, unknown> = {};
-    try { parsed = JSON.parse(payload) as Record<string, unknown>; } catch { message.error(t("service.invalidPayload")); return; }
+  const prepareRequestSeq = React.useRef(0);
+  const executeNamedAction = async (actionName: string, nextPayload: Record<string, unknown>, confirmation?: boolean) => {
+    if (!service) return;
+    const targetAction = service.actions?.find((item) => item.name === actionName);
     setCommandRunning(true);
-    setCommandResult(null);
     try {
-      const created = await apiFetch<Command>(`/api/admin/capsule-services/${service.id}/actions/${action.name}`, { method: "POST", body: JSON.stringify({ payload: parsed, confirmation: action.requiresConfirmation }) });
+      const created = await apiFetch<Command>(`/api/admin/capsule-services/${service.id}/actions/${actionName}`, { method: "POST", body: JSON.stringify({ payload: nextPayload, confirmation: confirmation === true }) });
       setCommandResult(created);
       onCommandCreated();
-      if (isLongRunningAction(action)) {
+      if (targetAction && isLongRunningAction(targetAction)) {
         message.info(t("command.startedAsync"));
         void onRefresh();
         return;
@@ -426,11 +507,20 @@ function ServiceDrawer({ service, refreshing, onClose, onRefresh, onCommandCreat
       setCommandResult(finished);
       if (finished.status === "SUCCEEDED") message.success(t("command.completed"));
       else message.error(finished.errorMessage ?? t("command.failed"));
+      void onRefresh();
     } finally {
       setCommandRunning(false);
     }
   };
+  const submitAction = async () => {
+    if (!service || !action) return;
+    let parsed: Record<string, unknown> = {};
+    try { parsed = JSON.parse(payload) as Record<string, unknown>; } catch { message.error(t("service.invalidPayload")); return; }
+    setCommandResult(null);
+    await executeNamedAction(action.name, parsed, action.requiresConfirmation);
+  };
   const openAction = async (next: Action) => {
+    const requestSeq = ++prepareRequestSeq.current;
     setAction(next);
     setPayload(JSON.stringify(defaultPayloadForAction(next), null, 2));
     setCommandResult(null);
@@ -440,16 +530,19 @@ function ServiceDrawer({ service, refreshing, onClose, onRefresh, onCommandCreat
     setPrepareLoading(true);
     try {
       const prepared = await apiFetch<ActionPrepare>(`/api/admin/capsule-services/${service.id}/actions/${next.name}`);
+      if (requestSeq !== prepareRequestSeq.current) return;
+      const nextPayload = prepared.initialPayload ?? defaultPayloadForAction(prepared.action);
       setAction(prepared.action);
-      setInitialPayload(prepared.initialPayload ?? defaultPayloadForAction(prepared.action));
-      setPayload(JSON.stringify(prepared.initialPayload ?? defaultPayloadForAction(prepared.action), null, 2));
+      setInitialPayload(nextPayload);
+      setPayload(JSON.stringify(nextPayload, null, 2));
     } catch (err) {
+      if (requestSeq !== prepareRequestSeq.current) return;
       message.error(err instanceof Error ? err.message : String(err));
       setAction(null);
       setInitialPayload(undefined);
       setPayload("{}");
     } finally {
-      setPrepareLoading(false);
+      if (requestSeq === prepareRequestSeq.current) setPrepareLoading(false);
     }
   };
   return <Drawer open={!!service} onClose={onClose} title={service?.name} width={860} extra={<Button disabled={!service} loading={refreshing} onClick={onRefresh}>{t("action.refresh")}</Button>}>
@@ -477,21 +570,62 @@ function ServiceDrawer({ service, refreshing, onClose, onRefresh, onCommandCreat
       <Card type="inner" title={t("common.health")}><JsonBlock value={service.health ?? {}} /></Card>
       <Card type="inner" title={t("common.manifest")}><JsonBlock value={service.manifest ?? {}} /></Card>
     </Space>}
-    <Modal open={!!action} title={t("service.executeAction", { label: action?.label ?? "" })} onCancel={() => setAction(null)} onOk={() => void submitAction()} okText={action?.requiresConfirmation ? t("action.confirmRun") : t("action.run")} confirmLoading={commandRunning} okButtonProps={{ danger: action?.requiresConfirmation }}>
-      <Typography.Paragraph>{action?.description}</Typography.Paragraph>
-      {action?.requiresConfirmation && <Typography.Paragraph type="danger">{t("service.actionRequiresConfirmation")}</Typography.Paragraph>}
-      <Typography.Text type="secondary">{t("service.autoPayloadHelp")}</Typography.Text>
-      {action && <SchemaPayloadFields action={action} initialPayload={initialPayload} setPayload={setPayload} />}
-      <Input.TextArea value={payload} onChange={(e) => setPayload(e.target.value)} rows={8} />
-      {commandResult && <Card size="small" title={`${t("command.title")} ${commandResult.id}`} style={{ marginTop: 16 }}>
-        <Descriptions size="small" bordered column={1} items={[
-          { key: "status", label: t("common.status"), children: <StatusTag value={commandResult.status} /> },
-          { key: "createdAt", label: t("command.createdAt"), children: commandResult.createdAt },
-          { key: "completedAt", label: t("command.completedAt"), children: commandResult.completedAt ?? "-" }
-        ]} />
-        <Typography.Title level={5} style={{ marginTop: 16 }}>{t("common.result")}</Typography.Title>
-        <JsonBlock value={commandResult.result ?? { errorCode: commandResult.errorCode, errorMessage: commandResult.errorMessage }} />
-      </Card>}
+    <Modal open={!!action} width={920} title={t("service.executeAction", { label: action?.label ?? "" })} onCancel={() => { prepareRequestSeq.current += 1; setAction(null); }} onOk={() => void submitAction()} okText={action?.requiresConfirmation ? t("action.confirmRun") : t("action.run")} confirmLoading={commandRunning || prepareLoading} okButtonProps={{ danger: action?.requiresConfirmation, disabled: prepareLoading }}>
+      <Spin spinning={prepareLoading} tip={t("service.actionPreparing")}>
+        {prepareLoading && <Typography.Paragraph type="secondary">{t("service.actionPreparingHelp")}</Typography.Paragraph>}
+        <Typography.Paragraph>{action?.description}</Typography.Paragraph>
+        {action?.requiresConfirmation && <Typography.Paragraph type="danger">{t("service.actionRequiresConfirmation")}</Typography.Paragraph>}
+        <Typography.Text type="secondary">{t("service.autoPayloadHelp")}</Typography.Text>
+        {action && !prepareLoading && <SchemaPayloadFields action={action} initialPayload={initialPayload} setPayload={setPayload} />}
+        <Collapse
+          size="small"
+          style={{ marginTop: 16 }}
+          items={[{
+            key: "requestJson",
+            label: t("service.requestJson"),
+            forceRender: true,
+            children: <Input.TextArea disabled={prepareLoading} value={payload} onChange={(e) => setPayload(e.target.value)} autoSize={{ minRows: 3, maxRows: 12 }} />,
+          }]}
+        />
+        {commandResult && <Card
+          size="small"
+          title={<Space>{`${t("command.title")} ${commandResult.id}`}<StatusTag value={commandResult.status} /></Space>}
+          style={{ marginTop: 16 }}
+        >
+          <Collapse
+            size="small"
+            items={[{
+              key: "commandDetails",
+              label: t("service.commandDetails"),
+              children: <Descriptions size="small" bordered column={1} items={[
+                { key: "status", label: t("common.status"), children: <StatusTag value={commandResult.status} /> },
+                { key: "createdAt", label: t("command.createdAt"), children: commandResult.createdAt },
+                { key: "completedAt", label: t("command.completedAt"), children: commandResult.completedAt ?? "-" }
+              ]} />
+            }]}
+          />
+          {generatedKeyFromCommand(commandResult) && <Alert
+            type="warning"
+            showIcon
+            style={{ marginTop: 12, marginBottom: 12 }}
+            message={t("service.generatedKeyTitle")}
+            description={<Space direction="vertical" style={{ width: "100%" }}>
+              <Typography.Text>{t("service.generatedKeyHelp")}</Typography.Text>
+              <Typography.Text code copyable={{ text: generatedKeyFromCommand(commandResult)! }}>{generatedKeyFromCommand(commandResult)}</Typography.Text>
+            </Space>}
+          />}
+          <ActionResultList command={commandResult} service={service} onRunAction={executeNamedAction} />
+          <Collapse
+            size="small"
+            style={{ marginTop: 16 }}
+            items={[{
+              key: "resultJson",
+              label: t("service.resultJson"),
+              children: <JsonBlock value={commandResult.result ?? { errorCode: commandResult.errorCode, errorMessage: commandResult.errorMessage }} />
+            }]}
+          />
+        </Card>}
+      </Spin>
     </Modal>
   </Drawer>;
 }
@@ -504,6 +638,16 @@ async function waitForCommandResult(commandId: string): Promise<Command> {
     await new Promise((resolve) => setTimeout(resolve, 1000));
   }
   return await apiFetch<Command>(`/api/admin/commands/${commandId}`);
+}
+
+
+function generatedKeyFromCommand(command: Command | null): string | undefined {
+  const resultData = command?.result?.data;
+  if (resultData && typeof resultData === "object" && !Array.isArray(resultData)) {
+    const generatedKey = (resultData as Record<string, unknown>).generatedKey;
+    if (typeof generatedKey === "string" && generatedKey.length > 0 && generatedKey !== "[REDACTED]") return generatedKey;
+  }
+  return undefined;
 }
 
 function isLongRunningAction(action: Action): boolean {

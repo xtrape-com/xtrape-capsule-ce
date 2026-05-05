@@ -19,7 +19,7 @@ export function parseJsonObject(value: string | null | undefined): Record<string
   return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : undefined;
 }
 
-const sensitiveKeyPattern = /token|secret|password|cookie|authorization|api[-_]?key/i;
+const sensitiveKeyPattern = /token|secret|password|cookie|authorization|api[-_]?key\b|generatedKey|rawKey|plainTextKey/i;
 
 export function redactSecrets<T>(value: T): T {
   if (Array.isArray(value)) return value.map(item => redactSecrets(item)) as T;

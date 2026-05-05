@@ -170,6 +170,7 @@ const maintenanceSettingsSchema = z.object({
 });
 
 const sessions = new Map<string, Session>();
+const ephemeralCommandSecrets = new Map<string, { generatedKey?: string; expiresAt: number }>();
 
 function now(): string {
   return new Date().toISOString();
@@ -306,19 +307,45 @@ async function waitForCommandResult(db: Db, commandId: string, timeoutMs = 30_00
   throw Object.assign(new Error("Action prepare timed out waiting for agent."), { statusCode: 408, code: "ACTION_PREPARE_TIMEOUT" });
 }
 
-function publicCommandResult(row: CommandResultRow | undefined) {
+function publicCommandResult(row: CommandResultRow | undefined, options: { consumeEphemeralSecrets?: boolean } = {}) {
   if (!row) return null;
+  const data = jsonParse(row.dataJson);
+  if (options.consumeEphemeralSecrets && data && typeof data === "object" && !Array.isArray(data)) {
+    const ephemeral = ephemeralCommandSecrets.get(row.commandId);
+    if (ephemeral && ephemeral.expiresAt > Date.now()) {
+      if (ephemeral.generatedKey) (data as Record<string, unknown>).generatedKey = ephemeral.generatedKey;
+      ephemeralCommandSecrets.delete(row.commandId);
+    } else if (ephemeral) {
+      ephemeralCommandSecrets.delete(row.commandId);
+    }
+  }
   return {
     id: row.id,
     commandId: row.commandId,
     agentId: row.agentId,
     success: Boolean(row.success),
     message: row.message,
-    data: jsonParse(row.dataJson),
+    data,
     error: jsonParse(row.errorJson),
     reportedAt: row.reportedAt,
     createdAt: row.createdAt
   };
+}
+
+function pruneExpiredEphemeralCommandSecrets(): void {
+  const current = Date.now();
+  for (const [commandId, secret] of ephemeralCommandSecrets.entries()) {
+    if (secret.expiresAt <= current) ephemeralCommandSecrets.delete(commandId);
+  }
+}
+
+function stashEphemeralCommandSecrets(commandId: string, data: unknown): void {
+  pruneExpiredEphemeralCommandSecrets();
+  if (!data || typeof data !== "object" || Array.isArray(data)) return;
+  const generatedKey = (data as Record<string, unknown>).generatedKey;
+  if (typeof generatedKey === "string" && generatedKey.length > 0) {
+    ephemeralCommandSecrets.set(commandId, { generatedKey, expiresAt: Date.now() + 5 * 60_000 });
+  }
 }
 
 
@@ -375,6 +402,23 @@ function authenticateAgent(req: FastifyRequest, db: Db, agentId: string): AgentR
     throw Object.assign(new Error(`Agent is ${agent.status.toLowerCase()}.`), { statusCode: 403, code: `AGENT_${agent.status}` });
   }
   db.prepare("update agent_tokens set lastUsedAt = ?, updatedAt = ? where tokenHash = ?").run(now(), now(), hashToken(token));
+  return agent;
+}
+
+
+function assertAgentCanHandleAction(db: Db, config: AppConfig, service: CapsuleServiceRow): AgentRow {
+  const agent = db.prepare("select * from agents where id = ? and workspaceId = ?").get(service.agentId, DEFAULT_WORKSPACE.id) as AgentRow | undefined;
+  if (!agent) throw Object.assign(new Error("Agent not found for Capsule Service."), { statusCode: 409, code: "AGENT_NOT_FOUND" });
+  if (["OFFLINE", "DISABLED", "REVOKED"].includes(agent.status)) {
+    throw Object.assign(new Error(`Agent is ${agent.status.toLowerCase()}; start or reconnect the agent before running actions.`), { statusCode: 409, code: `AGENT_${agent.status}` });
+  }
+  if (!agent.lastHeartbeatAt) {
+    throw Object.assign(new Error("Agent has not sent a heartbeat yet; wait for it to connect before running actions."), { statusCode: 409, code: "AGENT_NOT_READY" });
+  }
+  const lastHeartbeatMs = Date.parse(agent.lastHeartbeatAt);
+  if (!Number.isFinite(lastHeartbeatMs) || Date.now() - lastHeartbeatMs > config.OPSTAGE_AGENT_OFFLINE_THRESHOLD_SECONDS * 1000) {
+    throw Object.assign(new Error("Agent heartbeat is stale; wait for the agent to reconnect before running actions."), { statusCode: 409, code: "AGENT_HEARTBEAT_STALE" });
+  }
   return agent;
 }
 
@@ -1244,6 +1288,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     if (!service) throw Object.assign(new Error("Capsule Service not found."), { statusCode: 404, code: "CAPSULE_SERVICE_NOT_FOUND" });
     const action = db.prepare("select * from action_definitions where serviceId = ? and name = ? and enabled = 1").get(service.id, params.actionName) as ActionDefinitionRow | undefined;
     if (!action) throw Object.assign(new Error("Action not found."), { statusCode: 404, code: "ACTION_NOT_FOUND" });
+    assertAgentCanHandleAction(db, config, service);
     const ts = now();
     const commandId = createId("cmd");
     db.prepare(`
@@ -1294,6 +1339,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     if (action.requiresConfirmation && body.confirmation !== true) {
       throw Object.assign(new Error("Action requires confirmation."), { statusCode: 409, code: "ACTION_REQUIRES_CONFIRMATION" });
     }
+    assertAgentCanHandleAction(db, config, service);
     const ts = now();
     const commandId = createId("cmd");
     const expiresAt = action.timeoutSeconds ? new Date(Date.now() + action.timeoutSeconds * 1000).toISOString() : null;
@@ -1438,14 +1484,17 @@ export async function buildApp(options: BuildAppOptions = {}) {
     const command = db.prepare("select * from commands where id = ? and workspaceId = ?").get(commandId, DEFAULT_WORKSPACE.id) as CommandRow | undefined;
     if (!command) throw Object.assign(new Error("Command not found."), { statusCode: 404, code: "COMMAND_NOT_FOUND" });
     const result = db.prepare("select * from command_results where commandId = ?").get(commandId) as CommandResultRow | undefined;
-    return { success: true, data: { ...publicCommand(command), result: publicCommandResult(result) } };
+    return { success: true, data: { ...publicCommand(command), result: publicCommandResult(result, { consumeEphemeralSecrets: true }) } };
   });
 
   app.get("/api/agents/:agentId/commands", async (req) => {
     const agentId = (req.params as { agentId: string }).agentId;
-    authenticateAgent(req, db, agentId);
+    const agent = authenticateAgent(req, db, agentId);
     const ts = now();
-    const rows = db.prepare("select * from commands where agentId = ? and status = 'PENDING' order by createdAt asc limit 10").all(agentId) as CommandRow[];
+    db.prepare("update agents set status = 'ONLINE', lastHeartbeatAt = ?, updatedAt = ? where id = ?").run(ts, ts, agent.id);
+    const query = req.query as { limit?: string | number } | undefined;
+    const limit = Math.min(10, Math.max(1, Number(query?.limit ?? 10) || 10));
+    const rows = db.prepare("select * from commands where agentId = ? and status = 'PENDING' order by createdAt asc limit ?").all(agentId, limit) as CommandRow[];
     for (const row of rows) {
       db.prepare("update commands set status = 'RUNNING', startedAt = ?, updatedAt = ? where id = ? and status = 'PENDING'").run(ts, ts, row.id);
       row.status = "RUNNING";
@@ -1467,6 +1516,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     }
     const ts = now();
     const resultId = createId("crs");
+    stashEphemeralCommandSecrets(command.id, body.data);
     db.prepare(`
       insert into command_results (id, commandId, agentId, success, message, dataJson, errorJson, reportedAt, createdAt)
       values (?, ?, ?, ?, ?, ?, ?, ?, ?)
