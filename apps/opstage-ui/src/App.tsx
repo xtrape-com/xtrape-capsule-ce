@@ -494,7 +494,17 @@ function ServiceDrawer({ service, refreshing, onClose, onRefresh, onCommandCreat
   const [commandResult, setCommandResult] = React.useState<Command | null>(null);
   const [commandRunning, setCommandRunning] = React.useState(false);
   const [prepareLoading, setPrepareLoading] = React.useState(false);
+  const [prepareStartedAt, setPrepareStartedAt] = React.useState<number | null>(null);
+  const [prepareElapsedMs, setPrepareElapsedMs] = React.useState(0);
+  const [prepareError, setPrepareError] = React.useState<{ message: string; code?: string; status?: number } | null>(null);
   const prepareRequestSeq = React.useRef(0);
+  React.useEffect(() => {
+    if (!prepareLoading || !prepareStartedAt) return undefined;
+    const update = () => setPrepareElapsedMs(Date.now() - prepareStartedAt);
+    update();
+    const timer = window.setInterval(update, 1000);
+    return () => window.clearInterval(timer);
+  }, [prepareLoading, prepareStartedAt]);
   const executeNamedAction = async (actionName: string, nextPayload: Record<string, unknown>, confirmation?: boolean) => {
     if (!service) return;
     const targetAction = service.actions?.find((item) => item.name === actionName);
@@ -531,8 +541,12 @@ function ServiceDrawer({ service, refreshing, onClose, onRefresh, onCommandCreat
     setCommandResult(null);
     setCommandRunning(false);
     setInitialPayload(undefined);
+    setPrepareError(null);
     if (!service) return;
     setPrepareLoading(true);
+    const startedAt = Date.now();
+    setPrepareStartedAt(startedAt);
+    setPrepareElapsedMs(0);
     try {
       const prepared = await apiFetch<ActionPrepare>(`/api/admin/capsule-services/${service.id}/actions/${next.name}`);
       if (requestSeq !== prepareRequestSeq.current) return;
@@ -542,12 +556,17 @@ function ServiceDrawer({ service, refreshing, onClose, onRefresh, onCommandCreat
       setPayload(JSON.stringify(nextPayload, null, 2));
     } catch (err) {
       if (requestSeq !== prepareRequestSeq.current) return;
-      message.error(err instanceof Error ? err.message : String(err));
-      setAction(null);
+      const error = err instanceof ApiError
+        ? { message: err.message, code: err.code, status: err.status }
+        : { message: err instanceof Error ? err.message : String(err) };
+      setPrepareError(error);
+      message.error(error.message);
       setInitialPayload(undefined);
-      setPayload("{}");
     } finally {
-      if (requestSeq === prepareRequestSeq.current) setPrepareLoading(false);
+      if (requestSeq === prepareRequestSeq.current) {
+        setPrepareLoading(false);
+        setPrepareStartedAt(null);
+      }
     }
   };
   return <Drawer open={!!service} onClose={onClose} title={service?.name} width={860} extra={<Button disabled={!service} loading={refreshing} onClick={onRefresh}>{t("action.refresh")}</Button>}>
@@ -575,9 +594,23 @@ function ServiceDrawer({ service, refreshing, onClose, onRefresh, onCommandCreat
       <Card type="inner" title={t("common.health")}><JsonBlock value={service.health ?? {}} /></Card>
       <Card type="inner" title={t("common.manifest")}><JsonBlock value={service.manifest ?? {}} /></Card>
     </Space>}
-    <Modal open={!!action} width={920} title={t("service.executeAction", { label: action?.label ?? "" })} onCancel={() => { prepareRequestSeq.current += 1; setAction(null); }} onOk={() => void submitAction()} okText={action?.requiresConfirmation ? t("action.confirmRun") : t("action.run")} confirmLoading={commandRunning || prepareLoading} okButtonProps={{ danger: action?.requiresConfirmation, disabled: prepareLoading }}>
+    <Modal open={!!action} width={920} title={t("service.executeAction", { label: action?.label ?? "" })} onCancel={() => { prepareRequestSeq.current += 1; setAction(null); setPrepareError(null); setPrepareStartedAt(null); }} onOk={() => void submitAction()} okText={action?.requiresConfirmation ? t("action.confirmRun") : t("action.run")} confirmLoading={commandRunning || prepareLoading} okButtonProps={{ danger: action?.requiresConfirmation, disabled: prepareLoading || Boolean(prepareError) }}>
       <Spin spinning={prepareLoading} tip={t("service.actionPreparing")}>
-        {prepareLoading && <Typography.Paragraph type="secondary">{t("service.actionPreparingHelp")}</Typography.Paragraph>}
+        {prepareLoading && <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message={t("service.actionPreparing")}
+          description={t("service.actionPreparingDetail", { elapsed: Math.floor(prepareElapsedMs / 1000), status: service?.status ?? "-" })}
+        />}
+        {prepareError && <Alert
+          type="error"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message={t("service.actionPrepareFailed")}
+          description={`${prepareError.message}${prepareError.code ? ` (${prepareError.code})` : ""}`}
+          action={<Button size="small" onClick={() => action && void openAction(action)}>{t("action.retry")}</Button>}
+        />}
         <Typography.Paragraph>{action?.description}</Typography.Paragraph>
         {action?.requiresConfirmation && <Typography.Paragraph type="danger">{t("service.actionRequiresConfirmation")}</Typography.Paragraph>}
         <Typography.Text type="secondary">{t("service.autoPayloadHelp")}</Typography.Text>
