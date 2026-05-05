@@ -467,6 +467,10 @@ describe("Phase 3 command and action loop", () => {
     });
     expect(secondPoll.statusCode).toBe(200);
     expect(secondPoll.json().data.map((item: { id: string }) => item.id)).toEqual(commandIds.slice(1));
+    const metrics = await app.inject({ method: "GET", url: "/api/admin/metrics", cookies: { opstage_session: cookie.value } });
+    expect(metrics.statusCode).toBe(200);
+    expect(metrics.json().data.operational.agentCommandPolls).toBe(2);
+    expect(metrics.json().data.operational.commandsDispatched).toBe(3);
 
     await app.close();
     db.close();
@@ -629,6 +633,9 @@ describe("Phase 3 command and action loop", () => {
     });
     expect(oversized.statusCode).toBe(413);
     expect(oversized.json().error.code).toBe("COMMAND_RESULT_TOO_LARGE");
+    const metrics = await app.inject({ method: "GET", url: "/api/admin/metrics", cookies: { opstage_session: cookie.value } });
+    expect(metrics.statusCode).toBe(200);
+    expect(metrics.json().data.operational.oversizedCommandResultsRejected).toBe(1);
     await app.close();
   });
 

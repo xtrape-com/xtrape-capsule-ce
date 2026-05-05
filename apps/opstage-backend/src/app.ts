@@ -347,9 +347,10 @@ function commandResultPayloadSizeBytes(body: { message?: unknown; data?: unknown
   return Buffer.byteLength(safeJsonStringify({ message: body.message ?? null, data: body.data ?? {}, error: body.error ?? {} }), "utf8");
 }
 
-function assertCommandResultPayloadSize(config: AppConfig, body: { message?: unknown; data?: unknown; error?: unknown }): void {
+function assertCommandResultPayloadSize(config: AppConfig, body: { message?: unknown; data?: unknown; error?: unknown }, onReject?: () => void): void {
   const size = commandResultPayloadSizeBytes(body);
   if (size > config.OPSTAGE_COMMAND_RESULT_MAX_BYTES) {
+    onReject?.();
     throw Object.assign(new Error(`Command result payload is too large (${size} bytes); max is ${config.OPSTAGE_COMMAND_RESULT_MAX_BYTES} bytes.`), { statusCode: 413, code: "COMMAND_RESULT_TOO_LARGE" });
   }
 }
@@ -626,9 +627,17 @@ function auditRowsToCsv(rows: AuditEventRow[]): string {
   return `${lines.join("\n")}\n`;
 }
 
-function collectMetrics(db: Db) {
+interface RuntimeCounters {
+  agentCommandPolls: number;
+  oversizedCommandResultsRejected: number;
+}
+
+function collectMetrics(db: Db, counters: RuntimeCounters) {
   const count = (table: string) => (db.prepare(`select count(*) as count from ${table} where workspaceId = ?`).get(DEFAULT_WORKSPACE.id) as { count: number }).count;
   const byStatus = (table: string) => Object.fromEntries((db.prepare(`select status, count(*) as count from ${table} where workspaceId = ? group by status`).all(DEFAULT_WORKSPACE.id) as { status: string; count: number }[]).map(row => [row.status, row.count]));
+  const auditActionCount = (action: string) => (db.prepare("select count(*) as count from audit_events where workspaceId = ? and action = ?").get(DEFAULT_WORKSPACE.id, action) as { count: number }).count;
+  const commandErrorCount = (errorCode: string) => (db.prepare("select count(*) as count from commands where workspaceId = ? and errorCode = ?").get(DEFAULT_WORKSPACE.id, errorCode) as { count: number }).count;
+  const commandTypeStatusCount = (type: string, status: string) => (db.prepare("select count(*) as count from commands where workspaceId = ? and type = ? and status = ?").get(DEFAULT_WORKSPACE.id, type, status) as { count: number }).count;
   return {
     workspace: DEFAULT_WORKSPACE,
     totals: {
@@ -644,6 +653,16 @@ function collectMetrics(db: Db) {
       capsuleServices: byStatus("capsule_services"),
       registrationTokens: byStatus("registration_tokens"),
       commands: byStatus("commands")
+    },
+    operational: {
+      agentCommandPolls: counters.agentCommandPolls,
+      commandsDispatched: auditActionCount("command.dispatched"),
+      commandsCompleted: auditActionCount("command.completed"),
+      commandsFailed: auditActionCount("command.failed"),
+      actionPrepareRequested: auditActionCount("service.action.prepare_requested"),
+      actionPrepareTimeouts: commandErrorCount("ACTION_PREPARE_TIMEOUT"),
+      actionPrepareFailures: commandTypeStatusCount("ACTION_PREPARE", "FAILED"),
+      oversizedCommandResultsRejected: counters.oversizedCommandResultsRejected
     }
   };
 }
@@ -820,6 +839,10 @@ export async function buildApp(options: BuildAppOptions = {}) {
   const app = Fastify({
     logger: options.logger ?? true
   });
+  const runtimeCounters: RuntimeCounters = {
+    agentCommandPolls: 0,
+    oversizedCommandResultsRejected: 0
+  };
 
   app.register(cookie);
 
@@ -1492,7 +1515,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
 
   app.get("/api/admin/metrics", async (req) => {
     getSessionUser(req, db, config);
-    return { success: true, data: collectMetrics(db) };
+    return { success: true, data: collectMetrics(db, runtimeCounters) };
   });
 
   app.get("/api/admin/diagnostics/runtime", async (req) => {
@@ -1526,6 +1549,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
   app.get("/api/agents/:agentId/commands", async (req) => {
     const agentId = (req.params as { agentId: string }).agentId;
     const agent = authenticateAgent(req, db, agentId);
+    runtimeCounters.agentCommandPolls += 1;
     const ts = now();
     db.prepare("update agents set status = 'ONLINE', lastHeartbeatAt = ?, updatedAt = ? where id = ?").run(ts, ts, agent.id);
     const query = req.query as { limit?: string | number } | undefined;
@@ -1545,7 +1569,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     const params = req.params as { agentId: string; commandId: string };
     const agent = authenticateAgent(req, db, params.agentId);
     const body = reportCommandResultRequestSchema.parse(req.body);
-    assertCommandResultPayloadSize(config, body);
+    assertCommandResultPayloadSize(config, body, () => { runtimeCounters.oversizedCommandResultsRejected += 1; });
     const command = db.prepare("select * from commands where id = ? and agentId = ?").get(params.commandId, agent.id) as CommandRow | undefined;
     if (!command) throw Object.assign(new Error("Command not found."), { statusCode: 404, code: "COMMAND_NOT_FOUND" });
     if (["SUCCEEDED", "FAILED", "EXPIRED", "CANCELLED"].includes(command.status)) {

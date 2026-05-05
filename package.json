@@ -2,7 +2,7 @@
   "name": "xtrape-capsule-ce",
   "version": "0.1.0",
   "private": true,
-  "description": "Opstage CE \u2014 a lightweight, self-hosted, open-source control plane for Capsule Services.",
+  "description": "Opstage CE — a lightweight, self-hosted, open-source control plane for Capsule Services.",
   "type": "module",
   "scripts": {
     "dev": "pnpm --parallel --filter @xtrape/opstage-backend --filter @xtrape/opstage-ui dev",
@@ -12,7 +12,7 @@
     "test": "pnpm build && pnpm -r test",
     "lint": "pnpm -r lint",
     "typecheck": "pnpm -r typecheck",
-    "contracts:check": "node scripts/external-contracts-check.mjs",
+    "contracts:check": "node scripts/external-contracts-check.mjs && node scripts/opstage-contracts-check.mjs",
     "db:validate": "pnpm --filter @xtrape/capsule-db db:validate",
     "db:generate": "pnpm --filter @xtrape/capsule-db db:generate",
     "smoke:demo": "pnpm build && node --import tsx scripts/smoke-demo.mjs",
