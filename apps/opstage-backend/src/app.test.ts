@@ -296,8 +296,8 @@ describe("Phase 2 agent registration and service report", () => {
 });
 
 describe("Phase 3 command and action loop", () => {
-  async function setupRegisteredService(db?: ReturnType<typeof openDatabase>) {
-    const app = await buildApp({ logger: false, config, ...(db ? { db } : {}) });
+  async function setupRegisteredService(db?: ReturnType<typeof openDatabase>, configPatch: Record<string, unknown> = {}) {
+    const app = await buildApp({ logger: false, config: { ...config, ...configPatch }, ...(db ? { db } : {}) });
     const login = await app.inject({
       method: "POST",
       url: "/api/admin/auth/login",
@@ -432,6 +432,46 @@ describe("Phase 3 command and action loop", () => {
     await app.close();
   });
 
+  it("respects agent command poll limit", async () => {
+    const db = openDatabase({ databaseUrl: ":memory:" });
+    const { app, cookie, csrfToken, agentId, agentToken, serviceId } = await setupRegisteredService(db);
+    const commandIds: string[] = [];
+    for (const message of ["one", "two", "three"]) {
+      const create = await app.inject({
+        method: "POST",
+        url: `/api/admin/capsule-services/${serviceId}/actions/echo`,
+        cookies: { opstage_session: cookie.value },
+        headers: { "x-csrf-token": csrfToken },
+        payload: { payload: { message } }
+      });
+      expect(create.statusCode).toBe(200);
+      commandIds.push(create.json().data.id as string);
+    }
+
+    const firstPoll = await app.inject({
+      method: "GET",
+      url: `/api/agents/${agentId}/commands?limit=1`,
+      headers: { authorization: `Bearer ${agentToken}` }
+    });
+    expect(firstPoll.statusCode).toBe(200);
+    expect(firstPoll.json().data).toHaveLength(1);
+    expect(firstPoll.json().data[0].id).toBe(commandIds[0]);
+
+    const statusesAfterFirstPoll = commandIds.map((id) => (db.prepare("select status from commands where id = ?").get(id) as { status: string }).status);
+    expect(statusesAfterFirstPoll).toEqual(["RUNNING", "PENDING", "PENDING"]);
+
+    const secondPoll = await app.inject({
+      method: "GET",
+      url: `/api/agents/${agentId}/commands?limit=2`,
+      headers: { authorization: `Bearer ${agentToken}` }
+    });
+    expect(secondPoll.statusCode).toBe(200);
+    expect(secondPoll.json().data.map((item: { id: string }) => item.id)).toEqual(commandIds.slice(1));
+
+    await app.close();
+    db.close();
+  });
+
 
   it("cancels pending command from admin API", async () => {
     const { app, cookie, csrfToken, serviceId } = await setupRegisteredService();
@@ -469,6 +509,31 @@ describe("Phase 3 command and action loop", () => {
     expect(retry.statusCode).toBe(200);
     expect(retry.json().data).toMatchObject({ status: "PENDING", actionName: "echo" });
     expect(retry.json().data.id).not.toBe(commandId);
+    await app.close();
+  });
+
+
+
+  it("rejects oversized command results", async () => {
+    const { app, cookie, csrfToken, agentId, agentToken, serviceId } = await setupRegisteredService(undefined, { OPSTAGE_COMMAND_RESULT_MAX_BYTES: 120 });
+    const create = await app.inject({
+      method: "POST",
+      url: `/api/admin/capsule-services/${serviceId}/actions/echo`,
+      cookies: { opstage_session: cookie.value },
+      headers: { "x-csrf-token": csrfToken },
+      payload: { payload: { message: "large-result" } }
+    });
+    expect(create.statusCode).toBe(200);
+    const commandId = create.json().data.id as string;
+    await app.inject({ method: "GET", url: `/api/agents/${agentId}/commands`, headers: { authorization: `Bearer ${agentToken}` } });
+    const oversized = await app.inject({
+      method: "POST",
+      url: `/api/agents/${agentId}/commands/${commandId}/result`,
+      headers: { authorization: `Bearer ${agentToken}` },
+      payload: { success: true, data: { text: "x".repeat(200) } }
+    });
+    expect(oversized.statusCode).toBe(413);
+    expect(oversized.json().error.code).toBe("COMMAND_RESULT_TOO_LARGE");
     await app.close();
   });
 

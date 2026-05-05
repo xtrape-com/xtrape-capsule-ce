@@ -332,6 +332,18 @@ function publicCommandResult(row: CommandResultRow | undefined, options: { consu
   };
 }
 
+
+function commandResultPayloadSizeBytes(body: { message?: unknown; data?: unknown; error?: unknown }): number {
+  return Buffer.byteLength(safeJsonStringify({ message: body.message ?? null, data: body.data ?? {}, error: body.error ?? {} }), "utf8");
+}
+
+function assertCommandResultPayloadSize(config: AppConfig, body: { message?: unknown; data?: unknown; error?: unknown }): void {
+  const size = commandResultPayloadSizeBytes(body);
+  if (size > config.OPSTAGE_COMMAND_RESULT_MAX_BYTES) {
+    throw Object.assign(new Error(`Command result payload is too large (${size} bytes); max is ${config.OPSTAGE_COMMAND_RESULT_MAX_BYTES} bytes.`), { statusCode: 413, code: "COMMAND_RESULT_TOO_LARGE" });
+  }
+}
+
 function pruneExpiredEphemeralCommandSecrets(): void {
   const current = Date.now();
   for (const [commandId, secret] of ephemeralCommandSecrets.entries()) {
@@ -1509,6 +1521,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     const params = req.params as { agentId: string; commandId: string };
     const agent = authenticateAgent(req, db, params.agentId);
     const body = reportCommandResultRequestSchema.parse(req.body);
+    assertCommandResultPayloadSize(config, body);
     const command = db.prepare("select * from commands where id = ? and agentId = ?").get(params.commandId, agent.id) as CommandRow | undefined;
     if (!command) throw Object.assign(new Error("Command not found."), { statusCode: 404, code: "COMMAND_NOT_FOUND" });
     if (["SUCCEEDED", "FAILED", "EXPIRED", "CANCELLED"].includes(command.status)) {

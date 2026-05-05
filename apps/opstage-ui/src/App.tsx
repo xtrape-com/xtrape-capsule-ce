@@ -353,6 +353,9 @@ interface SchemaProperty {
   enumLabels?: string[];
   default?: unknown;
   maxLength?: number;
+  format?: "password" | "textarea" | string;
+  placeholder?: string;
+  readOnly?: boolean;
 }
 
 function getSchemaProperties(action: Action | null): Record<string, SchemaProperty> {
@@ -402,9 +405,11 @@ function SchemaPayloadFields({ action, initialPayload, setPayload }: { action: A
         </Form.Item>;
       }
       return <Form.Item key={name} name={name} label={label} tooltip={property.description} rules={rules} extra={extra}>
-        {name.toLowerCase().includes("password")
-          ? <Input.Password placeholder={String(property.default ?? "")} maxLength={property.maxLength ?? 4096} />
-          : <Input placeholder={String(property.default ?? "")} maxLength={property.maxLength} />}
+        {property.format === "textarea"
+          ? <Input.TextArea placeholder={property.placeholder ?? String(property.default ?? "")} maxLength={property.maxLength} readOnly={property.readOnly} autoSize={{ minRows: 3, maxRows: 8 }} />
+          : property.format === "password" || name.toLowerCase().includes("password")
+            ? <Input.Password placeholder={property.placeholder ?? String(property.default ?? "")} maxLength={property.maxLength ?? 4096} readOnly={property.readOnly} />
+            : <Input placeholder={property.placeholder ?? String(property.default ?? "")} maxLength={property.maxLength} readOnly={property.readOnly} />}
       </Form.Item>;
     })}
   </Form>;

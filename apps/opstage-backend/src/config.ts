@@ -13,6 +13,7 @@ const envSchema = z.object({
   OPSTAGE_AUDIT_RETENTION_DAYS: z.coerce.number().int().min(0).default(90),
   OPSTAGE_MAINTENANCE_INTERVAL_SECONDS: z.coerce.number().int().min(0).default(60),
   OPSTAGE_BACKUP_DIR: z.string().default("./data/backups"),
+  OPSTAGE_COMMAND_RESULT_MAX_BYTES: z.coerce.number().int().positive().default(1_000_000),
   NODE_ENV: z.string().optional()
 });
 
