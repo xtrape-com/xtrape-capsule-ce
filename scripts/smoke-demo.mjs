@@ -64,8 +64,76 @@ async function main() {
       { key: "demo.message", type: "string", editable: false, sensitive: false, valuePreview: "hello smoke" },
       { key: "demo.secretRef", type: "string", editable: false, sensitive: true, valuePreview: "do-not-store", secretRef: "env:DEMO_SECRET" }
     ]);
-    agent.action({ name: "echo", label: "Echo", dangerLevel: "LOW", handler: async payload => ({ success: true, data: payload ?? {} }) });
+    agent.action({
+      name: "echo",
+      label: "Echo",
+      dangerLevel: "LOW",
+      inputSchema: {
+        type: "object",
+        properties: {
+          message: { type: "string", title: "Message", default: "hello from prepare" }
+        }
+      },
+      handler: async payload => ({ success: true, data: payload ?? {} })
+    });
     agent.action({ name: "runHealthCheck", label: "Run Health Check", dangerLevel: "LOW", handler: async () => ({ success: true, data: await agent.runHealth() }) });
+    agent.action({
+      name: "listThings",
+      label: "List Things",
+      dangerLevel: "LOW",
+      category: "diagnostics",
+      inputSchema: {
+        type: "object",
+        properties: {
+          q: { type: "string", title: "Keyword", default: "" }
+        }
+      },
+      prepare: async () => ({
+        action: {
+          name: "listThings",
+          label: "List Things",
+          dangerLevel: "LOW",
+          category: "diagnostics",
+          inputSchema: {
+            type: "object",
+            properties: {
+              q: { type: "string", title: "Keyword", description: "Filter by name.", default: "" }
+            }
+          }
+        },
+        initialPayload: { q: "" },
+        currentState: { totalThings: 2 }
+      }),
+      handler: async payload => {
+        const q = String(payload?.q ?? "").toLowerCase();
+        const rows = [
+          { id: "thing-1", name: "Alpha", enabled: true, sizeBytes: 1536, elapsedMs: 1250 },
+          { id: "thing-2", name: "Beta", enabled: false, sizeBytes: 1024 * 1024, elapsedMs: 65_000 }
+        ].filter(row => !q || row.name.toLowerCase().includes(q));
+        return {
+          success: true,
+          data: {
+            things: rows,
+            list: {
+              title: "Things",
+              emptyText: "No things",
+              pageSize: 5,
+              data: rows,
+              columns: [
+                { key: "id", label: "ID", format: "code", copyable: true },
+                { key: "name", label: "Name", ellipsis: true },
+                { key: "enabled", label: "Enabled", format: "boolean" },
+                { key: "sizeBytes", label: "Size", format: "bytes" },
+                { key: "elapsedMs", label: "Elapsed", format: "duration" }
+              ],
+              rowActions: [
+                { label: "Echo", action: "echo", payload: { message: "$row.id" } }
+              ]
+            }
+          }
+        };
+      }
+    });
 
     await agent.start();
     const storedToken = JSON.parse(await readFile(tokenFile, "utf8"));
@@ -75,6 +143,17 @@ async function main() {
     assert(services.statusCode === 200, `service list failed: ${services.statusCode}`);
     const service = services.json().data.find(item => item.code === "demo-capsule-service");
     assert(service, "demo service not reported");
+
+    const prepareEchoPromise = app.inject({
+      method: "GET",
+      url: `/api/admin/capsule-services/${service.id}/actions/echo`,
+      cookies: { opstage_session: cookie.value }
+    });
+    await agent.pollOnce();
+    const prepareEcho = await prepareEchoPromise;
+    assert(prepareEcho.statusCode === 200, `prepare echo failed: ${prepareEcho.statusCode} ${prepareEcho.body}`);
+    assert(prepareEcho.json().data.action.inputSchema.properties.message.default === "hello from prepare", "prepare did not return dynamic input schema");
+    assert(prepareEcho.json().data.initialPayload.message === "hello from prepare", "prepare did not return initial payload");
 
     const createEcho = await app.inject({
       method: "POST",
@@ -100,6 +179,32 @@ async function main() {
     await agent.pollOnce();
     const healthDetail = await app.inject({ method: "GET", url: `/api/admin/commands/${createHealth.json().data.id}`, cookies: { opstage_session: cookie.value } });
     assert(healthDetail.json().data.result.data.status === "UP", `health action failed: ${healthDetail.body}`);
+
+    const prepareListPromise = app.inject({
+      method: "GET",
+      url: `/api/admin/capsule-services/${service.id}/actions/listThings`,
+      cookies: { opstage_session: cookie.value }
+    });
+    await agent.pollOnce();
+    const prepareList = await prepareListPromise;
+    assert(prepareList.statusCode === 200, `prepare list failed: ${prepareList.statusCode} ${prepareList.body}`);
+    assert(prepareList.json().data.currentState.totalThings === 2, "prepare list did not return current state");
+
+    const createList = await app.inject({
+      method: "POST",
+      url: `/api/admin/capsule-services/${service.id}/actions/listThings`,
+      cookies: { opstage_session: cookie.value },
+      headers: { "x-csrf-token": csrfToken },
+      payload: { payload: { q: "" } }
+    });
+    assert(createList.statusCode === 200, `create list failed: ${createList.statusCode} ${createList.body}`);
+    await agent.pollOnce();
+    const listDetail = await app.inject({ method: "GET", url: `/api/admin/commands/${createList.json().data.id}`, cookies: { opstage_session: cookie.value } });
+    const listResult = listDetail.json().data.result.data.list;
+    assert(listResult.title === "Things", `list title missing: ${listDetail.body}`);
+    assert(listResult.data.length === 2, `list row count mismatch: ${listDetail.body}`);
+    assert(listResult.columns.some(column => column.format === "bytes"), "list columns did not include bytes format");
+    assert(listResult.rowActions[0].payload.message === "$row.id", "list row action payload template missing");
 
     const serviceDetail = await app.inject({ method: "GET", url: `/api/admin/capsule-services/${service.id}`, cookies: { opstage_session: cookie.value } });
     assert(!serviceDetail.body.includes("do-not-store"), "sensitive config value leaked");
