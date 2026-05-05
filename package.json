@@ -19,7 +19,8 @@
     "test:docker-smoke": "node scripts/docker-smoke.mjs",
     "release:check": "node scripts/release-check.mjs",
     "release:notes": "node -e \"const fs=require('fs'); const v=fs.readFileSync('VERSION','utf8').trim(); const text=fs.readFileSync('CHANGELOG.md','utf8'); const start=text.indexOf('## ['+v+']'); const end=text.indexOf('\\n## [', start+1); console.log(text.slice(start, end>0?end:text.length).trim())\"",
-    "repo:check": "node scripts/repo-check.mjs"
+    "repo:check": "node scripts/repo-check.mjs",
+    "smoke:ui": "pnpm --filter @xtrape/opstage-ui build && pnpm --filter @xtrape/opstage-ui test"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

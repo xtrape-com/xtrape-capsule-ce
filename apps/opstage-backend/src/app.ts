@@ -169,6 +169,39 @@ const maintenanceSettingsSchema = z.object({
   maintenanceIntervalSeconds: z.number().int().min(0).optional()
 });
 
+const commandListQuerySchema = z.object({
+  status: z.enum(["PENDING", "RUNNING", "SUCCEEDED", "FAILED", "EXPIRED", "CANCELLED"]).optional(),
+  type: z.enum(["ACTION_EXECUTE", "ACTION_PREPARE"]).optional(),
+  actionName: z.string().trim().min(1).max(128).optional(),
+  agentId: z.string().regex(/^agt_/, "agentId must start with agt_").optional(),
+  serviceId: z.string().regex(/^svc_/, "serviceId must start with svc_").optional()
+});
+
+function optionalQueryText(value: unknown): string | undefined {
+  if (Array.isArray(value)) value = value[0];
+  if (value === undefined || value === null || value === "") return undefined;
+  return String(value);
+}
+
+function parseCommandListQuery(query: unknown): z.infer<typeof commandListQuerySchema> {
+  const input = query as Record<string, unknown> | undefined;
+  const result = commandListQuerySchema.safeParse({
+    status: optionalQueryText(input?.status),
+    type: optionalQueryText(input?.type),
+    actionName: optionalQueryText(input?.actionName),
+    agentId: optionalQueryText(input?.agentId),
+    serviceId: optionalQueryText(input?.serviceId)
+  });
+  if (!result.success) {
+    throw Object.assign(new Error("Command query validation failed."), {
+      statusCode: 422,
+      code: "VALIDATION_FAILED",
+      details: { issues: result.error.issues.map(issue => ({ path: issue.path.join("."), message: issue.message })) }
+    });
+  }
+  return result.data;
+}
+
 const sessions = new Map<string, Session>();
 const ephemeralCommandSecrets = new Map<string, { generatedKey?: string; expiresAt: number }>();
 
@@ -1417,10 +1450,10 @@ export async function buildApp(options: BuildAppOptions = {}) {
   app.get("/api/admin/commands", async (req) => {
     getSessionUser(req, db, config);
     const { page, pageSize, offset } = getPagination(req.query);
-    const query = req.query as { status?: string; actionName?: string; agentId?: string; serviceId?: string } | undefined;
+    const query = parseCommandListQuery(req.query);
     const clauses = ["workspaceId = ?"];
     const values: unknown[] = [DEFAULT_WORKSPACE.id];
-    for (const [key, value] of Object.entries({ status: query?.status, actionName: query?.actionName, agentId: query?.agentId, serviceId: query?.serviceId })) {
+    for (const [key, value] of Object.entries({ status: query?.status, type: query?.type, actionName: query?.actionName, agentId: query?.agentId, serviceId: query?.serviceId })) {
       if (value) { clauses.push(`${key} = ?`); values.push(value); }
     }
     const where = clauses.join(" and ");

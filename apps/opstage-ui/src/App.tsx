@@ -1,4 +1,4 @@
-import { App as AntApp, Alert, Badge, Button, Card, Collapse, Descriptions, Drawer, Form, Input, InputNumber, Layout, Menu, Modal, Popconfirm, Select, Space, Spin, Statistic, Switch, Table, Tag, Typography, message } from "antd";
+import { App as AntApp, Alert, Badge, Button, Card, Collapse, Descriptions, Drawer, Form, Input, InputNumber, Layout, Menu, Modal, Popconfirm, Select, Space, Spin, Statistic, Switch, Table, Tag, Tooltip, Typography, message } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { useQuery } from "@tanstack/react-query";
 import React from "react";
@@ -21,7 +21,8 @@ interface User { id: string; username: string; displayName?: string | null; role
 interface AuditEvent { id: string; actorType: string; actorId?: string | null; action: string; targetType?: string | null; targetId?: string | null; result: string; message?: string | null; metadata: Record<string, unknown>; createdAt: string }
 interface RegistrationToken { id: string; name: string; status: string; agentId?: string | null; expiresAt?: string | null; usedAt?: string | null; revokedAt?: string | null; createdAt: string; token?: string; rawToken?: string }
 interface MaintenanceSettings { agentOfflineThresholdSeconds: number; auditRetentionDays: number; maintenanceIntervalSeconds: number }
-interface Metrics { totals: Record<string, number>; byStatus: Record<string, Record<string, number>> }
+interface Metrics { totals: Record<string, number>; byStatus: Record<string, Record<string, number>>; operational?: Record<string, number> }
+interface DiagnosticRow { key: string; value: string | number; category: string }
 interface MaintenanceResult { expiredRegistrationTokens: number; expiredCommands: number; offlineAgents: number; offlineServices: number; deletedAuditEvents: number; ranAt: string }
 interface DashboardSummary { workspace: { id: string; code: string; name: string }; agentCounts: Record<string, number>; serviceCounts: Record<string, number>; commandCounts: Record<string, number>; auditEventCount: number; recentCommands: Command[]; recentAuditEvents: AuditEvent[] }
 interface PageState { page: number; pageSize: number }
@@ -836,30 +837,53 @@ function accountStatusesFromHealth(health: Record<string, unknown> | null | unde
 
 function Commands() {
   const { t } = useI18n();
-  const [filters, setFilters] = React.useState<{ status?: string; actionName?: string }>({});
+  const [filters, setFilters] = React.useState<{ status?: string; type?: string; actionName?: string; agentId?: string; serviceId?: string }>({ type: "ACTION_EXECUTE" });
+  const [idFilters, setIdFilters] = React.useState<{ agentId?: string; serviceId?: string }>({});
   const [page, setPage] = React.useState<PageState>(defaultPage);
-  const updateFilters = (next: { status?: string; actionName?: string }) => { setFilters(next); setPage(defaultPage); };
-  const { data, loading, reload } = useQueryData(() => apiList<Command>(`/api/admin/commands${queryString({ ...filters, ...page })}`), [filters.status, filters.actionName, page.page, page.pageSize], 5000);
+  const updateFilters = (next: { status?: string; type?: string; actionName?: string; agentId?: string; serviceId?: string }) => { setFilters(next); setPage(defaultPage); };
+  const { data, loading, reload } = useQueryData(() => apiList<Command>(`/api/admin/commands${queryString({ ...filters, ...page })}`), [filters.status, filters.type, filters.actionName, filters.agentId, filters.serviceId, page.page, page.pageSize], 5000);
   const [selected, setSelected] = React.useState<Command | null>(null);
   const openCommand = async (id: string) => setSelected(await apiFetch<Command>(`/api/admin/commands/${id}`));
+  const commandHint = filters.type === "ACTION_EXECUTE" ? t("command.defaultFilterHint") : filters.type ? t("command.filteredTypeHint", { type: filters.type }) : t("command.allTypesHint");
   return <Card title={t("command.title")} extra={<Button onClick={reload}>{t("action.refresh")}</Button>}>
+    <Alert type="info" showIcon style={{ marginBottom: 16 }} message={commandHint} />
     <Space style={{ marginBottom: 16 }} wrap>
       <Input.Search placeholder={t("command.actionName")} allowClear onSearch={(actionName) => updateFilters({ ...filters, actionName })} style={{ width: 220 }} />
+      <Select allowClear placeholder={t("command.type")} style={{ width: 180 }} value={filters.type} onChange={(type) => updateFilters({ ...filters, type })} options={["ACTION_EXECUTE", "ACTION_PREPARE"].map(value => ({ value, label: value }))} />
       <Select allowClear placeholder={t("common.status")} style={{ width: 180 }} onChange={(status) => updateFilters({ ...filters, status })} options={["PENDING", "RUNNING", "SUCCEEDED", "FAILED", "CANCELLED", "EXPIRED"].map(value => ({ value, label: value }))} />
+      <Input placeholder={t("command.agentId")} allowClear value={idFilters.agentId} onChange={(event) => setIdFilters({ ...idFilters, agentId: event.target.value })} style={{ width: 220 }} />
+      <Input placeholder={t("command.serviceId")} allowClear value={idFilters.serviceId} onChange={(event) => setIdFilters({ ...idFilters, serviceId: event.target.value })} style={{ width: 220 }} />
+      <Button onClick={() => updateFilters({ ...filters, agentId: idFilters.agentId, serviceId: idFilters.serviceId })}>{t("command.applyIdFilters")}</Button>
+      <Button onClick={() => updateFilters({ ...filters, type: undefined })}>{t("command.showAllTypes")}</Button>
+      <Button onClick={() => { setIdFilters({}); updateFilters({ type: "ACTION_EXECUTE" }); }}>{t("command.resetFilters")}</Button>
     </Space>
-    <Table rowKey="id" loading={loading} dataSource={data?.data ?? []} pagination={{ current: data?.pagination?.page ?? page.page, pageSize: data?.pagination?.pageSize ?? page.pageSize, total: data?.pagination?.total, showSizeChanger: true, onChange: (nextPage, nextPageSize) => setPage({ page: nextPage, pageSize: nextPageSize }) }} onRow={(row) => ({ onClick: () => void openCommand(row.id) })} columns={[
-      { title: t("common.id"), dataIndex: "id" }, { title: "Action", dataIndex: "actionName" }, { title: t("common.status"), dataIndex: "status", render: (v) => <StatusTag value={v} /> }, { title: t("common.createdAt"), dataIndex: "createdAt" }, { title: t("command.completedAt"), dataIndex: "completedAt" },
+    <Table rowKey="id" loading={loading} dataSource={data?.data ?? []} scroll={{ x: 1400 }} pagination={{ current: data?.pagination?.page ?? page.page, pageSize: data?.pagination?.pageSize ?? page.pageSize, total: data?.pagination?.total, showSizeChanger: true, onChange: (nextPage, nextPageSize) => setPage({ page: nextPage, pageSize: nextPageSize }) }} onRow={(row) => ({ onClick: () => void openCommand(row.id) })} columns={[
+      { title: t("common.id"), dataIndex: "id", render: (v) => <Typography.Text code copyable>{String(v)}</Typography.Text> },
+      { title: t("command.type"), dataIndex: "type", render: (v) => <Tag>{String(v)}</Tag> },
+      { title: "Action", dataIndex: "actionName" },
+      { title: t("common.status"), dataIndex: "status", render: (v) => <StatusTag value={v} /> },
+      { title: t("command.agentId"), dataIndex: "agentId", render: (v) => <Typography.Text code copyable>{String(v)}</Typography.Text> },
+      { title: t("command.serviceId"), dataIndex: "serviceId", render: (v) => <Typography.Text code copyable>{String(v)}</Typography.Text> },
+      { title: t("common.createdAt"), dataIndex: "createdAt" }, { title: t("command.completedAt"), dataIndex: "completedAt" },
       { title: t("common.operation"), render: (_, row) => <Space>{["PENDING", "RUNNING"].includes(row.status) ? <Popconfirm title={t("confirm.cancelCommand")} onConfirm={async (event) => { event?.stopPropagation(); await apiFetch(`/api/admin/commands/${row.id}/cancel`, { method: "POST" }); message.success(t("command.cancelled")); void reload(); }}><Button danger size="small" onClick={(event) => event.stopPropagation()}>{t("action.cancel")}</Button></Popconfirm> : null}{["FAILED", "EXPIRED", "CANCELLED"].includes(row.status) ? <Popconfirm title={t("confirm.retryCommand")} onConfirm={async (event) => { event?.stopPropagation(); await apiFetch(`/api/admin/commands/${row.id}/retry`, { method: "POST" }); message.success(t("command.retried")); void reload(); }}><Button size="small" onClick={(event) => event.stopPropagation()}>{t("command.retry")}</Button></Popconfirm> : null}</Space> }
     ] as ColumnsType<Command>} />
-    <Drawer open={!!selected} onClose={() => setSelected(null)} title={selected?.id} width={720} extra={<Button disabled={!selected} onClick={() => selected && void openCommand(selected.id)}>{t("action.refresh")}</Button>}>
+    <Drawer open={!!selected} onClose={() => setSelected(null)} title={selected?.id} width={860} extra={<Button disabled={!selected} onClick={() => selected && void openCommand(selected.id)}>{t("action.refresh")}</Button>}>
       <Descriptions bordered column={1} items={selected ? [
         { key: "status", label: t("common.status"), children: <StatusTag value={selected.status} /> },
+        { key: "type", label: t("command.type"), children: <Tag>{selected.type}</Tag> },
         { key: "action", label: "Action", children: selected.actionName },
+        { key: "agentId", label: t("command.agentId"), children: <Typography.Text code copyable>{selected.agentId}</Typography.Text> },
+        { key: "serviceId", label: t("command.serviceId"), children: <Typography.Text code copyable>{selected.serviceId}</Typography.Text> },
+        { key: "errorCode", label: t("command.errorCode"), children: selected.errorCode ?? "-" },
+        { key: "errorMessage", label: t("command.errorMessage"), children: selected.errorMessage ?? "-" },
         { key: "createdAt", label: t("command.createdAt"), children: selected.createdAt },
+        { key: "startedAt", label: t("command.startedAt"), children: selected.startedAt ?? "-" },
         { key: "completedAt", label: t("command.completedAt"), children: selected.completedAt ?? "-" }
       ] : []} />
-      <Typography.Title level={5} style={{ marginTop: 24 }}>Payload</Typography.Title><JsonBlock value={selected?.payload} />
-      <Typography.Title level={5}>Result / Error</Typography.Title><JsonBlock value={selected?.result ?? { errorCode: selected?.errorCode, errorMessage: selected?.errorMessage }} />
+      <Collapse style={{ marginTop: 24 }} items={[
+        { key: "payload", label: "Payload", children: <JsonBlock value={selected?.payload} /> },
+        { key: "result", label: "Result / Error", children: <JsonBlock value={selected?.result ?? { errorCode: selected?.errorCode, errorMessage: selected?.errorMessage }} /> }
+      ]} />
     </Drawer>
   </Card>;
 }
@@ -878,6 +902,55 @@ function AuditEvents() {
       <Input placeholder={t("audit.targetType")} allowClear onChange={(event) => updateFilters({ ...filters, targetType: event.target.value })} style={{ width: 180 }} />
     </Space>
     <Table rowKey="id" loading={loading} dataSource={data?.data ?? []} pagination={{ current: data?.pagination?.page ?? page.page, pageSize: data?.pagination?.pageSize ?? page.pageSize, total: data?.pagination?.total, showSizeChanger: true, onChange: (nextPage, nextPageSize) => setPage({ page: nextPage, pageSize: nextPageSize }) }} columns={[{ title: t("common.time"), dataIndex: "createdAt" }, { title: t("common.actor"), dataIndex: "actorType" }, { title: "Action", dataIndex: "action" }, { title: t("audit.targetType"), dataIndex: "targetType" }, { title: t("common.result"), dataIndex: "result", render: (v) => <StatusTag value={String(v)} /> }, { title: t("common.message"), dataIndex: "message" }]} />
+  </Card>;
+}
+
+export function metricRows(values: Record<string, number> | undefined): Array<{ key: string; value: number }> {
+  return Object.entries(values ?? {}).map(([key, value]) => ({ key, value })).sort((a, b) => a.key.localeCompare(b.key));
+}
+
+function diagnosticValue(value: unknown): string | number {
+  if (value === undefined || value === null || value === "") return "-";
+  if (typeof value === "number" || typeof value === "string" || typeof value === "boolean") return String(value);
+  return JSON.stringify(value);
+}
+
+export function hasMetricWarning(key: string, value: number): boolean {
+  return value > 0 && ["commandsFailed", "actionPrepareTimeouts", "actionPrepareFailures", "oversizedCommandResultsRejected"].includes(key);
+}
+
+export function diagnosticRows(diagnostics: Record<string, unknown> | null | undefined): DiagnosticRow[] {
+  if (!diagnostics) return [];
+  const memory = diagnostics.memory && typeof diagnostics.memory === "object" ? diagnostics.memory as Record<string, unknown> : {};
+  const config = diagnostics.config && typeof diagnostics.config === "object" ? diagnostics.config as Record<string, unknown> : {};
+  const maintenance = config.maintenance && typeof config.maintenance === "object" ? config.maintenance as Record<string, unknown> : {};
+  const rows: DiagnosticRow[] = [
+    { category: "runtime", key: "version", value: diagnosticValue(diagnostics.version) },
+    { category: "runtime", key: "edition", value: diagnosticValue(diagnostics.edition) },
+    { category: "runtime", key: "node", value: diagnosticValue(diagnostics.node) },
+    { category: "runtime", key: "platform", value: diagnosticValue(diagnostics.platform) },
+    { category: "runtime", key: "arch", value: diagnosticValue(diagnostics.arch) },
+    { category: "runtime", key: "uptimeSeconds", value: diagnosticValue(diagnostics.uptimeSeconds) },
+    { category: "runtime", key: "pid", value: diagnosticValue(diagnostics.pid) },
+    { category: "memory", key: "rss", value: formatBytes(memory.rss) },
+    { category: "memory", key: "heapUsed", value: formatBytes(memory.heapUsed) },
+    { category: "memory", key: "heapTotal", value: formatBytes(memory.heapTotal) },
+    { category: "memory", key: "external", value: formatBytes(memory.external) },
+    { category: "config", key: "host", value: diagnosticValue(config.host) },
+    { category: "config", key: "port", value: diagnosticValue(config.port) },
+    { category: "config", key: "databaseUrl", value: diagnosticValue(config.databaseUrl) },
+    { category: "config", key: "staticDir", value: diagnosticValue(config.staticDir) },
+    { category: "config", key: "backupDir", value: diagnosticValue(config.backupDir) },
+    { category: "maintenance", key: "agentOfflineThresholdSeconds", value: diagnosticValue(maintenance.agentOfflineThresholdSeconds) },
+    { category: "maintenance", key: "auditRetentionDays", value: diagnosticValue(maintenance.auditRetentionDays) },
+    { category: "maintenance", key: "maintenanceIntervalSeconds", value: diagnosticValue(maintenance.maintenanceIntervalSeconds) }
+  ];
+  return rows.filter(row => row.value !== "-");
+}
+
+function MetricStatCard({ title, tooltip, value, warning }: { title: string; tooltip: string; value: number; warning?: boolean }) {
+  return <Card size="small">
+    <Tooltip title={tooltip}><Statistic title={title} value={value} valueStyle={warning ? { color: "#cf1322" } : undefined} /></Tooltip>
   </Card>;
 }
 
@@ -915,8 +988,45 @@ function Settings() {
       </Form>
     </Card>
     {result && <Card title={t("settings.lastMaintenanceResult")}><JsonBlock value={result} /></Card>}
-    <Card title={t("settings.metrics")} loading={metrics.loading}><JsonBlock value={metrics.data} /></Card>
-    <Card title={t("settings.diagnostics")} loading={diagnostics.loading}><JsonBlock value={diagnostics.data} /></Card>
+    <Card title={t("settings.metrics")} loading={metrics.loading}>
+      <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+        <Space wrap>
+          <MetricStatCard title={t("metrics.agentCommandPolls")} tooltip={t("metrics.agentCommandPollsHelp")} value={metrics.data?.operational?.agentCommandPolls ?? 0} />
+          <MetricStatCard title={t("metrics.commandsDispatched")} tooltip={t("metrics.commandsDispatchedHelp")} value={metrics.data?.operational?.commandsDispatched ?? 0} />
+          <MetricStatCard title={t("metrics.commandsCompleted")} tooltip={t("metrics.commandsCompletedHelp")} value={metrics.data?.operational?.commandsCompleted ?? 0} />
+          <MetricStatCard title={t("metrics.commandsFailed")} tooltip={t("metrics.commandsFailedHelp")} value={metrics.data?.operational?.commandsFailed ?? 0} warning={hasMetricWarning("commandsFailed", metrics.data?.operational?.commandsFailed ?? 0)} />
+          <MetricStatCard title={t("metrics.prepareFailures")} tooltip={t("metrics.prepareFailuresHelp")} value={(metrics.data?.operational?.actionPrepareTimeouts ?? 0) + (metrics.data?.operational?.actionPrepareFailures ?? 0)} warning={((metrics.data?.operational?.actionPrepareTimeouts ?? 0) + (metrics.data?.operational?.actionPrepareFailures ?? 0)) > 0} />
+          <MetricStatCard title={t("metrics.oversizedResultsRejected")} tooltip={t("metrics.oversizedResultsRejectedHelp")} value={metrics.data?.operational?.oversizedCommandResultsRejected ?? 0} warning={hasMetricWarning("oversizedCommandResultsRejected", metrics.data?.operational?.oversizedCommandResultsRejected ?? 0)} />
+        </Space>
+        <Table
+          size="small"
+          rowKey="key"
+          pagination={false}
+          dataSource={metricRows(metrics.data?.operational)}
+          columns={[
+            { title: t("common.key"), dataIndex: "key" },
+            { title: t("metrics.value"), dataIndex: "value", render: (value, row) => <Typography.Text type={hasMetricWarning(String(row.key), Number(value)) ? "danger" : undefined}>{String(value)}</Typography.Text> }
+          ]}
+        />
+        <Collapse size="small" items={[{ key: "rawMetrics", label: t("metrics.rawJson"), children: <JsonBlock value={metrics.data} /> }]} />
+      </Space>
+    </Card>
+    <Card title={t("settings.diagnostics")} loading={diagnostics.loading}>
+      <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+        <Table
+          size="small"
+          rowKey={(row) => `${row.category}:${row.key}`}
+          pagination={false}
+          dataSource={diagnosticRows(diagnostics.data)}
+          columns={[
+            { title: t("diagnostics.category"), dataIndex: "category", render: (v) => <Tag>{String(v)}</Tag> },
+            { title: t("common.key"), dataIndex: "key" },
+            { title: t("metrics.value"), dataIndex: "value" }
+          ]}
+        />
+        <Collapse size="small" items={[{ key: "rawDiagnostics", label: t("diagnostics.rawJson"), children: <JsonBlock value={diagnostics.data} /> }]} />
+      </Space>
+    </Card>
   </Space>;
 }
 

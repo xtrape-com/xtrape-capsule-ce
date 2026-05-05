@@ -415,8 +415,15 @@ describe("Phase 3 command and action loop", () => {
     const list = await app.inject({ method: "GET", url: "/api/admin/commands", cookies: { opstage_session: cookie.value } });
     expect(list.statusCode).toBe(200);
     expect(list.json().data[0].id).toBe(commandId);
-    const filteredList = await app.inject({ method: "GET", url: "/api/admin/commands?status=SUCCEEDED&actionName=echo", cookies: { opstage_session: cookie.value } });
+    const filteredList = await app.inject({ method: "GET", url: `/api/admin/commands?status=SUCCEEDED&type=ACTION_EXECUTE&actionName=echo&agentId=${agentId}&serviceId=${serviceId}`, cookies: { opstage_session: cookie.value } });
     expect(filteredList.json().pagination.total).toBe(1);
+    const mismatchedTypeList = await app.inject({ method: "GET", url: "/api/admin/commands?type=ACTION_PREPARE", cookies: { opstage_session: cookie.value } });
+    expect(mismatchedTypeList.json().pagination.total).toBe(0);
+    const invalidTypeList = await app.inject({ method: "GET", url: "/api/admin/commands?type=BAD_TYPE", cookies: { opstage_session: cookie.value } });
+    expect(invalidTypeList.statusCode).toBe(422);
+    expect(invalidTypeList.json().error.code).toBe("VALIDATION_FAILED");
+    const invalidAgentFilter = await app.inject({ method: "GET", url: "/api/admin/commands?agentId=bad-agent", cookies: { opstage_session: cookie.value } });
+    expect(invalidAgentFilter.statusCode).toBe(422);
 
     const dashboard = await app.inject({ method: "GET", url: "/api/admin/dashboard/summary", cookies: { opstage_session: cookie.value } });
     expect(dashboard.statusCode).toBe(200);

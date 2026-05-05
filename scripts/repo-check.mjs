@@ -38,4 +38,7 @@ if (existsSync(".env")) {
 const release = spawnSync("pnpm", ["release:check"], { stdio: "inherit" });
 if (release.status !== 0) process.exit(release.status ?? 1);
 
+const contracts = spawnSync("pnpm", ["contracts:check"], { stdio: "inherit" });
+if (contracts.status !== 0) process.exit(contracts.status ?? 1);
+
 console.log("Repository check passed.");
