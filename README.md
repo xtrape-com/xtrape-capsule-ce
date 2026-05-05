@@ -34,6 +34,12 @@ AI products quietly accumulate dozens of small services. They are too small for 
 - Schema-driven action panels with `ACTION_PREPARE` → `ACTION_EXECUTE`
 - UI in English and 中文 (selected language stored in `localStorage`)
 
+## Screenshots
+
+> Real product screenshots are scheduled for the v0.1.0 Public Preview release. Until then the architecture is illustrated below in plain text. You can spin up the console locally with the [Quick Start](#quick-start) and see the live UI on port `8080`.
+
+When the screenshots land, they will live under [`xtrape-capsule-site/public/screenshots/`](https://github.com/xtrape-com/xtrape-capsule-site/tree/main/public/screenshots) and will cover: Dashboard, Agents, Capsule Services, Service detail, Action execution, and Audit Events.
+
 ## Architecture
 
 ```text
@@ -128,6 +134,19 @@ Highlights:
 | **Cloud** | Future · Planned | Hosted Opstage; Agents connect outbound |
 
 → [Editions comparison](https://xtrape-com.github.io/xtrape-capsule-site/editions/ce)
+
+## Security Notes
+
+CE is **not hardened for unattended public-internet exposure**. Before deploying anywhere reachable from the open internet:
+
+- Set a strong `OPSTAGE_SESSION_SECRET` and a non-default admin password.
+- Put Opstage behind a reverse proxy that terminates TLS, preserves the session cookie, and forwards `X-CSRF-Token`.
+- Add an additional access layer (VPN, IP allow-list, SSO at the proxy). CE has no built-in IP allow-list, no rate-limit on the admin login, no SSO.
+- Restrict the Agent token file's permissions on every host running an Agent (`chmod 600`).
+- Treat each Action your service exposes as a remotely-callable authority boundary; validate payloads server-side and use `requiresConfirmation` for destructive operations.
+- Never report secrets in [config reporting](https://xtrape-com.github.io/xtrape-capsule-site/agents/config-reporting); mark sensitive keys with `sensitive: true` and omit their values.
+
+For the full safe-deployment checklist and token model, see [Security Overview](https://xtrape-com.github.io/xtrape-capsule-site/security/overview) on the public site, plus this repo's [SECURITY.md](./SECURITY.md) for vulnerability reporting.
 
 ## Roadmap
 
