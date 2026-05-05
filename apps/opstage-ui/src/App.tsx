@@ -13,9 +13,9 @@ interface Action { id: string; serviceId: string; name: string; label: string; d
 interface ActionPrepare { action: Action; initialPayload: Record<string, unknown>; currentState?: Record<string, unknown> }
 interface ConfigItem { id: string; configKey: string; label?: string | null; type: string; source?: string | null; editable: number; sensitive: number; valuePreview?: string | null; defaultValue?: string | null; secretRef?: string | null }
 interface Command { id: string; agentId: string; serviceId: string; type: string; actionName: string; status: string; payload: Record<string, unknown>; errorCode?: string | null; errorMessage?: string | null; createdAt: string; updatedAt: string; startedAt?: string | null; completedAt?: string | null; result?: Record<string, unknown> | null }
-interface ResultListColumn { key: string; label?: string; format?: "text" | "status" | "datetime" | "boolean" | "code"; copyable?: boolean }
+interface ResultListColumn { key: string; label?: string; format?: "text" | "status" | "datetime" | "boolean" | "code" | "duration" | "relativeTime" | "bytes"; copyable?: boolean; ellipsis?: boolean; width?: number | string }
 interface ResultListRowAction { label: string; action: string; payload?: Record<string, unknown>; danger?: boolean; confirm?: boolean }
-interface ResultListMeta { title?: string; data?: Record<string, unknown>[]; columns?: ResultListColumn[]; rowActions?: ResultListRowAction[] }
+interface ResultListMeta { title?: string; data?: Record<string, unknown>[]; columns?: ResultListColumn[]; rowActions?: ResultListRowAction[]; emptyText?: string; pageSize?: number }
 interface AccountStatus { id?: string; label?: string; emailMasked?: string; enabled?: boolean; healthy?: boolean; operationStatus?: string; operationName?: string; operationMessage?: string; cooldownRemainingMs?: number; consecutiveFailures?: number; loginVerifiedAt?: number; lastError?: string }
 interface User { id: string; username: string; displayName?: string | null; role: string; status: string; lastLoginAt?: string | null; createdAt: string; updatedAt: string }
 interface AuditEvent { id: string; actorType: string; actorId?: string | null; action: string; targetType?: string | null; targetId?: string | null; result: string; message?: string | null; metadata: Record<string, unknown>; createdAt: string }
@@ -448,17 +448,67 @@ function resolveRowPayload(template: Record<string, unknown> | undefined, row: R
   return resolve(template ?? {}) as Record<string, unknown>;
 }
 
+function formatDurationMs(value: unknown): string {
+  const ms = Number(value);
+  if (!Number.isFinite(ms)) return "-";
+  if (Math.abs(ms) < 1000) return `${ms}ms`;
+  const seconds = ms / 1000;
+  if (Math.abs(seconds) < 60) return `${seconds.toFixed(seconds < 10 ? 1 : 0)}s`;
+  const minutes = seconds / 60;
+  if (Math.abs(minutes) < 60) return `${minutes.toFixed(minutes < 10 ? 1 : 0)}m`;
+  const hours = minutes / 60;
+  return `${hours.toFixed(hours < 10 ? 1 : 0)}h`;
+}
+
+function formatBytes(value: unknown): string {
+  const bytes = Number(value);
+  if (!Number.isFinite(bytes)) return "-";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let size = Math.abs(bytes);
+  let index = 0;
+  while (size >= 1024 && index < units.length - 1) {
+    size /= 1024;
+    index += 1;
+  }
+  const signed = bytes < 0 ? -size : size;
+  return `${signed.toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
+}
+
+function formatRelativeTime(value: unknown): string {
+  const timestamp = typeof value === "number" ? value : Date.parse(String(value ?? ""));
+  if (!Number.isFinite(timestamp)) return "-";
+  const diffMs = Date.now() - timestamp;
+  const suffix = diffMs >= 0 ? "ago" : "from now";
+  const abs = Math.abs(diffMs);
+  if (abs < 60_000) return `${Math.max(1, Math.round(abs / 1000))}s ${suffix}`;
+  if (abs < 3_600_000) return `${Math.round(abs / 60_000)}m ${suffix}`;
+  if (abs < 86_400_000) return `${Math.round(abs / 3_600_000)}h ${suffix}`;
+  return `${Math.round(abs / 86_400_000)}d ${suffix}`;
+}
+
 function renderListCell(value: unknown, column: ResultListColumn) {
   if (column.format === "status") return <StatusTag value={value === true ? "TRUE" : value === false ? "FALSE" : String(value ?? "")} />;
   if (column.format === "boolean") return <Tag color={value ? "green" : "default"}>{value ? "YES" : "NO"}</Tag>;
   if (column.format === "datetime") return value ? String(value) : "-";
-  const text = value === undefined || value === null || value === "" ? "-" : typeof value === "object" ? JSON.stringify(value) : String(value);
-  const node = column.format === "code" ? <Typography.Text code>{text}</Typography.Text> : <Typography.Text>{text}</Typography.Text>;
+  const text = value === undefined || value === null || value === ""
+    ? "-"
+    : column.format === "duration" ? formatDurationMs(value)
+      : column.format === "relativeTime" ? formatRelativeTime(value)
+        : column.format === "bytes" ? formatBytes(value)
+          : typeof value === "object" ? JSON.stringify(value) : String(value);
+  const node = column.format === "code"
+    ? <Typography.Text code ellipsis={column.ellipsis ? { tooltip: text } : false}>{text}</Typography.Text>
+    : <Typography.Text ellipsis={column.ellipsis ? { tooltip: text } : false}>{text}</Typography.Text>;
   return column.copyable && text !== "-" ? <Typography.Text copyable={{ text }}>{node}</Typography.Text> : node;
+}
+
+function resultRowKey(row: Record<string, unknown>, index?: number): string {
+  return String(row.id ?? row.key ?? row.name ?? index ?? JSON.stringify(row));
 }
 
 function ActionResultList({ command, service, onRunAction }: { command: Command | null; service: Service | null; onRunAction: (actionName: string, payload: Record<string, unknown>, confirmation?: boolean) => Promise<void> }) {
   const { t } = useI18n();
+  const [runningRowActionKey, setRunningRowActionKey] = React.useState<string | null>(null);
   const list = resultListFromCommand(command);
   if (!list) return null;
   const rows = list.data ?? [];
@@ -466,23 +516,45 @@ function ActionResultList({ command, service, onRunAction }: { command: Command 
   const tableColumns: ColumnsType<Record<string, unknown>> = columns.map((column) => ({
     title: column.label ?? column.key,
     dataIndex: column.key,
+    width: column.width,
+    ellipsis: column.ellipsis,
     render: (_value, row) => renderListCell(getPathValue(row, column.key), column),
   }));
   if (list.rowActions?.length) {
     tableColumns.push({
       title: t("common.actions"),
-      render: (_value, row) => <Space wrap>{list.rowActions!.map((rowAction) => {
+      render: (_value, row, index) => <Space wrap>{list.rowActions!.map((rowAction) => {
+        const actionKey = `${resultRowKey(row, index)}:${rowAction.action}:${rowAction.label}`;
+        const rowKey = resultRowKey(row, index);
+        const sameRowRunning = Boolean(runningRowActionKey?.startsWith(`${rowKey}:`));
+        const isRunning = runningRowActionKey === actionKey;
         const targetAction = service?.actions?.find((item) => item.name === rowAction.action);
         const needsConfirm = Boolean(rowAction.confirm || targetAction?.requiresConfirmation);
-        const button = <Button size="small" danger={rowAction.danger || targetAction?.requiresConfirmation} disabled={!targetAction} onClick={() => !needsConfirm && void onRunAction(rowAction.action, resolveRowPayload(rowAction.payload, row), false)}>{rowAction.label}</Button>;
+        const run = async () => {
+          setRunningRowActionKey(actionKey);
+          try {
+            await onRunAction(rowAction.action, resolveRowPayload(rowAction.payload, row), needsConfirm);
+          } finally {
+            setRunningRowActionKey(null);
+          }
+        };
+        const button = <Button size="small" loading={isRunning} danger={rowAction.danger || targetAction?.requiresConfirmation} disabled={!targetAction || (sameRowRunning && !isRunning)} onClick={() => !needsConfirm && void run()}>{rowAction.label}</Button>;
         return needsConfirm
-          ? <Popconfirm key={`${rowAction.action}-${rowAction.label}`} title={t("confirm.runRowAction", { label: rowAction.label })} onConfirm={() => void onRunAction(rowAction.action, resolveRowPayload(rowAction.payload, row), true)}>{button}</Popconfirm>
-          : <span key={`${rowAction.action}-${rowAction.label}`}>{button}</span>;
+          ? <Popconfirm key={actionKey} title={t("confirm.runRowAction", { label: rowAction.label })} onConfirm={() => void run()}>{button}</Popconfirm>
+          : <span key={actionKey}>{button}</span>;
       })}</Space>,
     });
   }
-  return <Card size="small" title={list.title ?? "List"} style={{ marginTop: 16 }}>
-    <Table size="small" rowKey={(row, index) => String(row.id ?? row.key ?? index)} pagination={rows.length > 10 ? { pageSize: 10 } : false} dataSource={rows} columns={tableColumns} />
+  const pageSize = Number.isFinite(Number(list.pageSize)) && Number(list.pageSize) > 0 ? Number(list.pageSize) : 10;
+  return <Card size="small" title={<Space>{list.title ?? "List"}<Tag>{t("service.listRowCount", { count: rows.length })}</Tag></Space>} style={{ marginTop: 16 }}>
+    <Table
+      size="small"
+      rowKey={resultRowKey}
+      locale={{ emptyText: list.emptyText ?? t("service.emptyList") }}
+      pagination={rows.length > pageSize ? { pageSize, showSizeChanger: true } : false}
+      dataSource={rows}
+      columns={tableColumns}
+    />
   </Card>;
 }
 
