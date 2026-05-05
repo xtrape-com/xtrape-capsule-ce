@@ -204,6 +204,7 @@ const auditEventQuerySchema = z.object({
   result: z.enum(["SUCCESS", "FAILURE"]).optional(),
   action: z.string().trim().min(1).max(160).optional(),
   targetType: z.string().trim().min(1).max(120).optional(),
+  targetId: z.string().trim().min(1).max(160).optional(),
   from: z.string().refine(value => Number.isFinite(Date.parse(value)), "from must be an ISO-8601 date-time").optional(),
   to: z.string().refine(value => Number.isFinite(Date.parse(value)), "to must be an ISO-8601 date-time").optional(),
   format: z.enum(["json", "csv"]).optional()
@@ -262,7 +263,7 @@ function parseAuditEventQuery(query: unknown): z.infer<typeof auditEventQuerySch
   const result = parseQuerySchema(
     auditEventQuerySchema,
     query,
-    ["actorType", "result", "action", "targetType", "from", "to", "format"],
+    ["actorType", "result", "action", "targetType", "targetId", "from", "to", "format"],
     "Audit event query validation failed."
   );
   if (result.from && result.to && Date.parse(result.from) > Date.parse(result.to)) {
@@ -708,7 +709,7 @@ function csvCell(value: unknown): string {
 function auditQueryWhere(query: z.infer<typeof auditEventQuerySchema>) {
   const clauses = ["workspaceId = ?"];
   const values: unknown[] = [DEFAULT_WORKSPACE.id];
-  for (const [key, value] of Object.entries({ actorType: query.actorType, result: query.result, action: query.action, targetType: query.targetType })) {
+  for (const [key, value] of Object.entries({ actorType: query.actorType, result: query.result, action: query.action, targetType: query.targetType, targetId: query.targetId })) {
     if (value) {
       clauses.push(`${key} = ?`);
       values.push(value);

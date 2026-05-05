@@ -1,27 +1,151 @@
 # xtrape-capsule CE
 
-Opstage CE is the Community Edition of the `xtrape-capsule` governance platform — a control plane for managing Capsule Services and their lifecycle.
+> **A lightweight, self-hosted operational control plane for Capsule Services.**
+>
+> xtrape-capsule CE 是一个轻量、可私有化部署的 Capsule Service 运行态治理平台。
 
-## Stack
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
+[![Status: Public Preview](https://img.shields.io/badge/status-v0.1%20Public%20Preview-orange.svg)](https://xtrape-com.github.io/xtrape-capsule-site/roadmap)
+[![Docs](https://img.shields.io/badge/docs-xtrape--capsule--site-blue.svg)](https://xtrape-com.github.io/xtrape-capsule-site/)
 
-- Fastify + TypeScript backend
-- React 18 + Ant Design UI
-- SQLite + Prisma persistence
-- Node.js Agent SDK (embedded, connects services to Opstage)
+Opstage CE is the Community Edition of [Xtrape Capsule](https://xtrape-com.github.io/xtrape-capsule-site/). It gives you one place to see, govern, and operate the small services that power AI products — integration adapters, Playwright workers, account pools, AI Agent runtimes — through an embedded Agent SDK.
 
-## Workspace
+> **Status: v0.1 Public Preview.** Recommended for local evaluation, small private deployments, and demos. Not recommended for business-critical HA production yet.
+
+## Why Capsule?
+
+AI products quietly accumulate dozens of small services. They are too small for a service mesh, too important to leave unmanaged, and they don't deserve a custom admin panel each. Opstage gives them a single, opinionated control plane:
+
+- **Inventory** — every Agent and every Capsule Service in one list, with `effectiveStatus`.
+- **Health** — coarse, operator-facing (`HEALTHY` / `UNHEALTHY` / `STALE` / `OFFLINE`).
+- **Configs** — observed from each service; never pushed.
+- **Actions** — operator-callable, schema-driven, audited.
+- **Commands** — the dispatch lifecycle (`PENDING → RUNNING → SUCCEEDED / FAILED / CANCELLED / EXPIRED`).
+- **Audit** — every meaningful event, exportable as CSV / JSON.
+
+## Features
+
+- Single-container deployment (Fastify + SQLite + React console)
+- Hash-only token storage (registration tokens + agent tokens)
+- RBAC: `owner` / `operator` / `viewer`
+- Agent disable / revoke; registration-token revoke
+- Maintenance scheduler (offline detection, expiry, audit pruning)
+- Metrics, diagnostics, audit export, owner-only SQLite backup
+- Schema-driven action panels with `ACTION_PREPARE` → `ACTION_EXECUTE`
+- UI in English and 中文 (selected language stored in `localStorage`)
+
+## Architecture
 
 ```text
-apps/opstage-backend
-apps/opstage-ui
-packages/contracts
-packages/db
-packages/agent-node
-packages/shared
-packages/test-utils
++---------------------+
+|     Opstage UI      |   ← human operator
++----------+----------+
+           |
+           v
++---------------------+
+|  Opstage Backend    |   ← control plane (Fastify + SQLite + Prisma)
++----------+----------+
+           ^
+           |  outbound only
+           |
++----------+----------+
+|  Embedded Agent     |   ← @xtrape/capsule-agent-node
++----------+----------+
+           |
+           v
++---------------------+
+|  Capsule Service    |   ← your service
++---------------------+
 ```
 
-## Setup checks
+The Backend never opens a socket to your services. All connections are initiated outbound by the Agent — this is what makes Opstage runnable behind NAT, on a laptop, or inside customer environments.
+
+## Quick Start
+
+> Public Docker images are planned for the v0.1.0 release. Until then, build locally with the Compose path below.
+
+```bash
+git clone https://github.com/xtrape-com/xtrape-capsule-ce.git
+cd xtrape-capsule-ce
+cp .env.example .env
+# edit OPSTAGE_ADMIN_PASSWORD and OPSTAGE_SESSION_SECRET in .env
+docker compose -f deploy/compose/docker-compose.yml up --build -d
+```
+
+Open `http://localhost:8080`. Default bootstrap credentials come from `.env.example`:
+
+```text
+Username: admin@example.local
+Password: ChangeMeBeforeRunning123!
+```
+
+→ Full guide: [Quick Start](https://xtrape-com.github.io/xtrape-capsule-site/getting-started/quick-start)
+
+## Connect your first Capsule Service
+
+Use the Node embedded Agent SDK ([`@xtrape/capsule-agent-node`](https://github.com/xtrape-com/xtrape-capsule-agent-node)):
+
+```ts
+import { CapsuleAgent } from "@xtrape/capsule-agent-node";
+
+const agent = new CapsuleAgent({
+  backendUrl: process.env.OPSTAGE_BACKEND_URL!,
+  registrationToken: process.env.OPSTAGE_REGISTRATION_TOKEN,
+  tokenFile: "./data/agent-token.json",
+});
+
+agent.registerService({
+  code: "my-capsule",
+  name: "My Capsule Service",
+  version: "0.1.0",
+});
+
+await agent.start();
+```
+
+→ Full guide: [Build your first Capsule Service](https://xtrape-com.github.io/xtrape-capsule-site/getting-started/first-capsule-service)
+
+## Documentation
+
+The complete public docs live at **<https://xtrape-com.github.io/xtrape-capsule-site/>**.
+
+Highlights:
+
+- [Quick Start](https://xtrape-com.github.io/xtrape-capsule-site/getting-started/quick-start)
+- [First Capsule Service](https://xtrape-com.github.io/xtrape-capsule-site/getting-started/first-capsule-service)
+- [Concepts](https://xtrape-com.github.io/xtrape-capsule-site/concepts/capsule-service) — Capsule Service / Opstage / Agent / Registration / Management Contract
+- [Opstage CE](https://xtrape-com.github.io/xtrape-capsule-site/opstage-ce/overview) — overview, Docker, configuration, admin UI, backup & upgrade
+- [Agents](https://xtrape-com.github.io/xtrape-capsule-site/agents/node-embedded-agent) — Node embedded SDK, action model, health & config reporting
+- [Security](https://xtrape-com.github.io/xtrape-capsule-site/security/overview) — token model, agent security, safe-deployment checklist
+- [Roadmap](https://xtrape-com.github.io/xtrape-capsule-site/roadmap), [FAQ](https://xtrape-com.github.io/xtrape-capsule-site/faq), [Glossary](https://xtrape-com.github.io/xtrape-capsule-site/glossary)
+
+## Editions
+
+| Edition | Status | Highlight |
+| --- | --- | --- |
+| **CE** | Current · v0.1 Public Preview | Single-node, SQLite, self-hosted (this repo) |
+| **EE** | Future · Planned | RBAC++, SSO, HA, Secret Vault |
+| **Cloud** | Future · Planned | Hosted Opstage; Agents connect outbound |
+
+→ [Editions comparison](https://xtrape-com.github.io/xtrape-capsule-site/editions/ce)
+
+## Roadmap
+
+`v0.1` Public Preview · Current. See the [full roadmap](https://xtrape-com.github.io/xtrape-capsule-site/roadmap) for v0.2 Basic Ops, v0.3 Capsule Spec freeze, v0.4 Agent expansion (Python / standalone), and v1.0 CE Stable.
+
+## Development
+
+This is a pnpm workspace.
+
+```text
+apps/opstage-backend       # Fastify + Prisma backend
+apps/opstage-ui            # React 18 + Ant Design admin console
+packages/contracts         # workspace mirror of @xtrape/capsule-contracts-node
+packages/db                # Prisma schema and migrations
+packages/agent-node        # workspace mirror of @xtrape/capsule-agent-node
+packages/shared            # cross-cutting helpers
+packages/test-utils        # in-process backend bootstrapping for tests
+```
 
 ```bash
 pnpm install
@@ -31,114 +155,23 @@ pnpm typecheck
 pnpm build
 ```
 
-## Admin UI
-
-The CE console provides:
-
-- Session login/logout with CSRF-aware API client
-- Dashboard summary and recent audit events
-- Registration token creation and revocation
-- Agent and Capsule Service inventory with detail drawers
-- Service config, health, and manifest review
-- Action execution with schema-driven payload form and JSON override
-- Command list, detail, and cancellation
-- Paginated Audit Events with filter controls
-- User management (owner/operator/viewer roles)
-- Agent lifecycle operations (enable/disable/revoke)
-- Maintenance settings with dynamic scheduler reload
-- Metrics, diagnostics, audit CSV/JSON export, and SQLite backup download
-- UI language switcher (`zh-CN` / `en-US`; stored in `localStorage` under `opstage.language`)
-
-## Capsule Service Action API
-
-Service report 中的 `actions` 只作为 **Action Catalog**：用于展示按钮列表和稳定说明，不承载动态表单。打开 Action 面板时，UI 通过 `GET` 创建 `ACTION_PREPARE` command，并使用 Agent 返回的动态 `inputSchema` / `initialPayload` / 当前状态渲染表单。
-
-Action 面板和 Action 执行使用同一个资源 URL，通过 HTTP method 区分语义：
-
-```text
-GET  /api/admin/capsule-services/:serviceId/actions/:actionName
-POST /api/admin/capsule-services/:serviceId/actions/:actionName
-```
-
-| Method | 语义 | 是否创建 Command | 用途 |
-|---|---|---:|---|
-| `GET` | 准备/打开 Action 面板 | 是：`ACTION_PREPARE` | 创建准备阶段 Command，由 Agent prepare handler 返回动态 action metadata、`inputSchema`、`initialPayload`、当前状态 |
-| `POST` | 执行 Action | 是：`ACTION_EXECUTE` | 根据 payload 创建执行 command，等待 Agent 拉取并执行 |
-
-`GET` 示例响应：
-
-```json
-{
-  "action": {
-    "name": "addAccount",
-    "label": "Add Account",
-    "requiresConfirmation": true,
-    "inputSchema": {
-      "type": "object",
-      "required": ["email"],
-      "properties": {
-        "email": { "type": "string", "default": "user@example.com" }
-      }
-    }
-  },
-  "initialPayload": {
-    "email": "user@example.com"
-  },
-  "currentState": {
-    "service": { "code": "capi-chatgpt", "status": "HEALTHY" },
-    "configs": []
-  },
-  "prepareCommand": {
-    "id": "cmd_prepare_001",
-    "type": "ACTION_PREPARE",
-    "status": "SUCCEEDED"
-  }
-}
-```
-
-`POST` 示例请求：
-
-```json
-{
-  "payload": {
-    "email": "user@example.com",
-    "enabled": true
-  },
-  "confirmation": true
-}
-```
-
-UI 打开 action modal 时调用 `GET`，后端创建 `ACTION_PREPARE` command 并等待 Agent prepare handler 返回动态表单和初始 JSON；用户点击 Run / Confirm run 时调用 `POST` 创建 `ACTION_EXECUTE` command，并在当前弹窗中轮询展示 command 结果。
-
-### Local development
-
-Run Backend and UI separately:
+For local development with hot reload:
 
 ```bash
-pnpm dev:backend
-pnpm dev:ui
+pnpm dev:backend          # http://localhost:8080
+pnpm dev:ui               # http://localhost:5173 (Vite proxies /api to :8080)
 ```
 
-Open `http://localhost:5173/` (Vite prints the next available port if 5173 is taken).  
-Vite proxies `/api` to `http://localhost:8080`.
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for the full developer flow, and [SECURITY.md](./SECURITY.md) for how to report vulnerabilities responsibly.
 
-Default bootstrap credentials for a fresh local database:
+## Related repositories
 
-```text
-Username: admin@example.local
-Password: ChangeMeBeforeRunning123!
-```
+| Repo | Purpose |
+| --- | --- |
+| [xtrape-capsule-site](https://github.com/xtrape-com/xtrape-capsule-site) | Public website + documentation |
+| [xtrape-capsule-agent-node](https://github.com/xtrape-com/xtrape-capsule-agent-node) | Node embedded Agent SDK |
+| [xtrape-capsule-contracts-node](https://github.com/xtrape-com/xtrape-capsule-contracts-node) | Shared contracts and Zod schemas |
 
-These come from `.env.example` (`OPSTAGE_ADMIN_USERNAME` / `OPSTAGE_ADMIN_PASSWORD`) and are used only when the first admin user is bootstrapped into an empty database. Changing the env vars later does not reset an existing account. For production, change the password and `OPSTAGE_SESSION_SECRET` before first start.
+## License
 
-## Production / Docker deployment
-
-The backend can serve the built React console directly and run as a single container.
-
-```bash
-cp .env.example .env
-# edit admin credentials and OPSTAGE_SESSION_SECRET
-docker compose -f deploy/compose/docker-compose.yml up --build -d
-```
-
-Open `http://localhost:8080`. See `deploy/README.md` for operational notes, health checks, and backup guidance.
+[Apache-2.0](./LICENSE). **"Xtrape", "Xtrape Capsule", and "Opstage"** are trademarks of their respective owners; the open-source license does not grant trademark rights.

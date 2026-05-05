@@ -136,7 +136,7 @@ assertPathMethod(openapi, {
   method: "get",
   operationId: "listAuditEvents",
   responses: ["200", "401", "422"],
-  includes: ["AuditActorType", "AuditResult", "name: from", "name: to", "format: date-time"]
+  includes: ["AuditActorType", "AuditResult", "name: targetId", "name: from", "name: to", "format: date-time"]
 });
 
 assertPathMethod(openapi, {

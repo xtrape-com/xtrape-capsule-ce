@@ -406,7 +406,7 @@ describe("Phase 3 command and action loop", () => {
       method: "POST",
       url: `/api/agents/${agentId}/commands/${commandId}/result`,
       headers: { authorization: `Bearer ${agentToken}` },
-      payload: { success: true, message: "done", data: { echoed: true, generatedKey: "capi_one_time_secret" } }
+      payload: { success: true, message: "done", data: { echoed: true, generatedKey: "demo_one_time_secret" } }
     });
     expect(result.statusCode).toBe(200);
     expect(result.json().data.success).toBe(true);
@@ -421,14 +421,14 @@ describe("Phase 3 command and action loop", () => {
     expect(detail.json().data.payload.password).toBe("[REDACTED]");
     expect(JSON.stringify(detail.json())).not.toContain("agent-secret-value");
     expect(detail.json().data.result.data.echoed).toBe(true);
-    expect(detail.json().data.result.data.generatedKey).toBe("capi_one_time_secret");
+    expect(detail.json().data.result.data.generatedKey).toBe("demo_one_time_secret");
 
     const detailAfterSecretConsumed = await app.inject({
       method: "GET",
       url: `/api/admin/commands/${commandId}`,
       cookies: { opstage_session: cookie.value }
     });
-    expect(JSON.stringify(detailAfterSecretConsumed.json())).not.toContain("capi_one_time_secret");
+    expect(JSON.stringify(detailAfterSecretConsumed.json())).not.toContain("demo_one_time_secret");
     expect(detailAfterSecretConsumed.json().data.result.data.generatedKey).toBe("[REDACTED]");
 
     const list = await app.inject({ method: "GET", url: "/api/admin/commands", cookies: { opstage_session: cookie.value } });
@@ -454,6 +454,9 @@ describe("Phase 3 command and action loop", () => {
     expect(auditEvents.json().data.some((event: { action: string }) => event.action === "command.completed" || event.action === "command.failed")).toBe(true);
     const filteredAuditEvents = await app.inject({ method: "GET", url: "/api/admin/audit-events?action=command.completed&actorType=AGENT&result=SUCCESS&from=2000-01-01T00:00:00.000Z", cookies: { opstage_session: cookie.value } });
     expect(filteredAuditEvents.json().pagination.total).toBe(1);
+    const filteredAuditByTarget = await app.inject({ method: "GET", url: `/api/admin/audit-events?targetType=Command&targetId=${commandId}`, cookies: { opstage_session: cookie.value } });
+    expect(filteredAuditByTarget.statusCode).toBe(200);
+    expect(filteredAuditByTarget.json().data.every((event: { targetType: string; targetId: string }) => event.targetType === "Command" && event.targetId === commandId)).toBe(true);
     const toBeforeEvents = await app.inject({ method: "GET", url: "/api/admin/audit-events?to=2000-01-01T00:00:00.000Z", cookies: { opstage_session: cookie.value } });
     expect(toBeforeEvents.json().pagination.total).toBe(0);
     const invalidAuditFilter = await app.inject({ method: "GET", url: "/api/admin/audit-events?actorType=BOT", cookies: { opstage_session: cookie.value } });
@@ -461,6 +464,8 @@ describe("Phase 3 command and action loop", () => {
     expect(invalidAuditFilter.json().error.code).toBe("VALIDATION_FAILED");
     const invalidAuditRange = await app.inject({ method: "GET", url: "/api/admin/audit-events?from=2026-01-02T00:00:00.000Z&to=2026-01-01T00:00:00.000Z", cookies: { opstage_session: cookie.value } });
     expect(invalidAuditRange.statusCode).toBe(422);
+    const invalidAuditTargetId = await app.inject({ method: "GET", url: "/api/admin/audit-events?targetId=%20%20%20", cookies: { opstage_session: cookie.value } });
+    expect(invalidAuditTargetId.statusCode).toBe(422);
     expect(JSON.stringify(auditEvents.json())).not.toContain("opstage_agent_");
     await app.close();
   });
