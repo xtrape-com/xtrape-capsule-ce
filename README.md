@@ -91,13 +91,13 @@ import { CapsuleAgent } from "@xtrape/capsule-agent-node";
 const agent = new CapsuleAgent({
   backendUrl: process.env.OPSTAGE_BACKEND_URL!,
   registrationToken: process.env.OPSTAGE_REGISTRATION_TOKEN,
-  tokenFile: "./data/agent-token.json",
-});
-
-agent.registerService({
-  code: "my-capsule",
-  name: "My Capsule Service",
-  version: "0.1.0",
+  tokenStore: { file: "./data/agent-token.txt" },
+  service: {
+    code: "my-capsule",
+    name: "My Capsule Service",
+    version: "0.1.0",
+    runtime: "nodejs",
+  },
 });
 
 await agent.start();
