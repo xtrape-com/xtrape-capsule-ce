@@ -155,8 +155,7 @@ await agent.start();
 
 ## Documentation
 
-The complete public docs live at
-[xtrape-capsule-site](https://xtrape-com.github.io/xtrape-capsule-site/).
+The complete public docs live at [xtrape-capsule-site](https://xtrape-com.github.io/xtrape-capsule-site/).
 
 Highlights:
 
