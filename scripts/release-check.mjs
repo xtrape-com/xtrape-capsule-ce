@@ -1,6 +1,13 @@
 import { readFileSync, existsSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 
+function run(name, args) {
+  const result = spawnSync(name, args, { stdio: "inherit" });
+  if (result.status !== 0) {
+    process.exit(result.status ?? 1);
+  }
+}
+
 const requiredFiles = ["VERSION", "CHANGELOG.md", "LICENSE", "NOTICE", "README.md", "deploy/README.md", ".env.example"];
 const missing = requiredFiles.filter(file => !existsSync(file));
 if (missing.length) {
@@ -41,5 +48,10 @@ if (compose.status !== 0) {
   console.error(compose.stderr || compose.stdout);
   process.exit(compose.status ?? 1);
 }
+
+run("pnpm", ["contracts:check"]);
+run("pnpm", ["db:validate"]);
+run("pnpm", ["typecheck"]);
+run("pnpm", ["build"]);
 
 console.log(`Release check passed for v${version}.`);
