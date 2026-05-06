@@ -1,21 +1,19 @@
-import { existsSync, readFileSync } from "node:fs";
-
-const forbidden = ["packages/contracts", "packages/agent-node"];
-for (const path of forbidden) {
-  if (existsSync(path)) {
-    console.error(`${path} must not exist in xtrape-capsule-ce; it is an external package by ADR-0008.`);
-    process.exit(1);
-  }
-}
+import { readFileSync } from "node:fs";
 
 const backendPkg = JSON.parse(readFileSync("apps/opstage-backend/package.json", "utf8"));
 const demoPkg = JSON.parse(readFileSync("apps/demo-capsule-service/package.json", "utf8"));
-if (backendPkg.dependencies?.["@xtrape/capsule-contracts-node"] !== "^0.1.0") {
-  console.error("Backend must consume @xtrape/capsule-contracts-node from npm semver ^0.1.0.");
+const rootPkg = JSON.parse(readFileSync("package.json", "utf8"));
+
+if (rootPkg.devDependencies?.["@xtrape/capsule-agent-node"] !== "workspace:*") {
+  console.error("Root dev dependency must use @xtrape/capsule-agent-node workspace:* until npm publication.");
   process.exit(1);
 }
-if (demoPkg.dependencies?.["@xtrape/capsule-agent-node"] !== "^0.1.0") {
-  console.error("Demo capsule service must consume @xtrape/capsule-agent-node from npm semver ^0.1.0.");
+if (backendPkg.dependencies?.["@xtrape/capsule-contracts-node"] !== "workspace:*") {
+  console.error("Backend must consume @xtrape/capsule-contracts-node from the workspace until npm publication.");
+  process.exit(1);
+}
+if (demoPkg.dependencies?.["@xtrape/capsule-agent-node"] !== "workspace:*") {
+  console.error("Demo capsule service must consume @xtrape/capsule-agent-node from the workspace until npm publication.");
   process.exit(1);
 }
 
@@ -25,4 +23,4 @@ if (!workspace.includes("packages/*")) {
   process.exit(1);
 }
 
-console.log("External contract/package boundary check passed.");
+console.log("Public Review workspace package boundary check passed.");
