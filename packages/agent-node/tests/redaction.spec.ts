@@ -1,0 +1,1 @@
+import { describe, expect, it } from "vitest"; import { redact } from "../src/security/redaction"; describe("redact",()=>{it("redacts tokens",()=>{expect(redact("opstage_agent_abc")).toContain("[REDACTED]");});});
