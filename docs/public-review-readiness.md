@@ -7,7 +7,7 @@ review for the pre-v0.1 Public Preview.
 
 - Public README and documentation links are present and do not contain empty
   placeholders.
-- Public docs do not mention private CAPI/internal naming.
+- Public docs do not mention private/internal naming.
 - Public docs do not advertise unreleased container images as the primary
   quick start path.
 - Sidecar or standalone agent flows are described as roadmap or future
@@ -73,9 +73,9 @@ pnpm build
 - [ ] CE `pnpm db:validate` passed.
 - [ ] CE `pnpm typecheck` passed.
 - [ ] CE `pnpm build` passed.
-- [ ] Public docs contain no `CAPI`, `capi`, or `capi-chatgpt`.
-- [ ] Public examples contain no `OPENAI_BASE_URL`.
-- [ ] Public docs contain no unresolved placeholder text such as `****`.
+- [ ] Public docs contain no private/internal product names.
+- [ ] Public examples contain no provider-specific SDK endpoint variables.
+- [ ] Public docs contain no unresolved placeholder markers.
 - [ ] Public Review feedback issue or issue template exists.
 - [ ] Live site is accessible.
 - [ ] `xtrape-capsule-docs` remains private and is not used as the public

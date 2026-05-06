@@ -1,41 +1,67 @@
-import { readFileSync } from "node:fs";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 
-// Check that workspace mirrors exist for Public Review validation
-const contractsExists = existsSync("packages/contracts");
-const agentNodeExists = existsSync("packages/agent-node");
+const allowedExternalRange = /^(\^0\.1\.0-public-review\.\d+|\^0\.1\.0)$/;
 
-if (!contractsExists || !agentNodeExists) {
-  console.error("packages/contracts and packages/agent-node must exist as workspace mirrors for Public Review validation.");
-  process.exit(1);
+function readJson(path) {
+  return JSON.parse(readFileSync(path, "utf8"));
 }
 
-// Check that CE root package uses workspace:* dependency
-const rootPkg = JSON.parse(readFileSync("package.json", "utf8"));
-if (rootPkg.devDependencies?.["@xtrape/capsule-agent-node"] !== "workspace:*") {
-  console.error("Root dev dependency must use @xtrape/capsule-agent-node workspace:* during Public Review.");
-  process.exit(1);
+function assertExternalDependency({ file, section, name }) {
+  const pkg = readJson(file);
+  const value = pkg[section]?.[name];
+
+  if (value === undefined) {
+    console.error(`${file} must declare ${name} in ${section}.`);
+    process.exit(1);
+  }
+
+  if (value === "workspace:*") {
+    console.error(`${file} must consume ${name} from npm during Public Review, not workspace:*.`);
+    process.exit(1);
+  }
+
+  if (!allowedExternalRange.test(value)) {
+    console.error(`${file} must use ${name} range ^0.1.0-public-review.x or ^0.1.0; found ${value}.`);
+    process.exit(1);
+  }
 }
 
-// Check that backend uses workspace:* dependency  
-const backendPkg = JSON.parse(readFileSync("apps/opstage-backend/package.json", "utf8"));
-if (backendPkg.dependencies?.["@xtrape/capsule-contracts-node"] !== "workspace:*") {
-  console.error("Backend must consume @xtrape/capsule-contracts-node from the workspace during Public Review.");
-  process.exit(1);
+assertExternalDependency({
+  file: "package.json",
+  section: "devDependencies",
+  name: "@xtrape/capsule-agent-node",
+});
+assertExternalDependency({
+  file: "apps/opstage-backend/package.json",
+  section: "dependencies",
+  name: "@xtrape/capsule-contracts-node",
+});
+assertExternalDependency({
+  file: "apps/demo-capsule-service/package.json",
+  section: "dependencies",
+  name: "@xtrape/capsule-agent-node",
+});
+
+for (const path of ["packages/contracts", "packages/agent-node"]) {
+  if (existsSync(path)) {
+    console.error(`${path} is a stale external package mirror and must not exist in CE.`);
+    process.exit(1);
+  }
 }
 
-// Check that demo uses workspace:* dependency
-const demoPkg = JSON.parse(readFileSync("apps/demo-capsule-service/package.json", "utf8"));
-if (demoPkg.dependencies?.["@xtrape/capsule-agent-node"] !== "workspace:*") {
-  console.error("Demo capsule service must consume @xtrape/capsule-agent-node from the workspace during Public Review.");
-  process.exit(1);
-}
-
-// Verify workspace configuration includes packages/*
 const workspaceContent = readFileSync("pnpm-workspace.yaml", "utf8");
-if (!workspaceContent.includes("packages/*")) {
-  console.error("pnpm-workspace.yaml should include packages/* to cover CE-owned packages.");
-  process.exit(1);
+for (const required of ["apps/*", "packages/*"]) {
+  if (!workspaceContent.includes(required)) {
+    console.error(`pnpm-workspace.yaml must include ${required}.`);
+    process.exit(1);
+  }
 }
 
-console.log("Public Review workspace package boundary check passed.");
+for (const stale of ["xtrape-capsule-contracts-node", "xtrape-capsule-agent-node"]) {
+  if (workspaceContent.includes(stale)) {
+    console.error(`pnpm-workspace.yaml must not include nonexistent path ${stale}.`);
+    process.exit(1);
+  }
+}
+
+console.log("Public Review npm package dependency check passed.");

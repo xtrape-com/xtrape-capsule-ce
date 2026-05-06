@@ -64,7 +64,11 @@ function assertSchema(openapi, schemaName, requiredProperties = []) {
 }
 
 if (!existsSync(openapiPath) || !existsSync(errorsPath)) {
-  fail(`Contract files not found. Set XTRAPE_CAPSULE_DOCS_DIR or place xtrape-capsule-docs next to this repo. Looked in: ${docsDir}`);
+  if (process.env.XTRAPE_CAPSULE_DOCS_DIR) {
+    fail(`Contract files not found. Set XTRAPE_CAPSULE_DOCS_DIR to a directory containing 09-contracts. Looked in: ${docsDir}`);
+  }
+  console.log(`Opstage structured contract check skipped; optional private contract source not found at ${docsDir}.`);
+  process.exit(0);
 }
 
 const openapi = readFileSync(openapiPath, "utf8");
