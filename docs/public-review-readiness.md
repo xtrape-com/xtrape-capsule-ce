@@ -29,6 +29,15 @@ candidate:
 
 ```bash
 pnpm install
+pnpm release:check
+```
+
+`pnpm release:check` should include the CE engineering validation path:
+`contracts:check`, `db:validate`, `typecheck`, and `build`.
+
+If running checks individually, use:
+
+```bash
 pnpm contracts:check
 pnpm db:validate
 pnpm typecheck
@@ -49,3 +58,25 @@ pnpm build
   Site/docs, Quick Start, deployment, security, or API design.
 - Follow-up issues should separate documentation corrections from behavioral or
   contract changes.
+
+## Start criteria
+
+- [ ] site `pnpm docs:build` passed.
+- [ ] contracts-node `pnpm build` passed.
+- [ ] contracts-node `pnpm typecheck` passed.
+- [ ] contracts-node `pnpm test` passed.
+- [ ] agent-node `pnpm build` passed.
+- [ ] agent-node `pnpm typecheck` passed.
+- [ ] agent-node `pnpm test` passed.
+- [ ] CE fresh `pnpm install` passed.
+- [ ] CE `pnpm contracts:check` passed.
+- [ ] CE `pnpm db:validate` passed.
+- [ ] CE `pnpm typecheck` passed.
+- [ ] CE `pnpm build` passed.
+- [ ] Public docs contain no `CAPI`, `capi`, or `capi-chatgpt`.
+- [ ] Public examples contain no `OPENAI_BASE_URL`.
+- [ ] Public docs contain no unresolved placeholder text such as `****`.
+- [ ] Public Review feedback issue or issue template exists.
+- [ ] Live site is accessible.
+- [ ] `xtrape-capsule-docs` remains private and is not used as the public
+  review entry point.

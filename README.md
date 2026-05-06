@@ -20,6 +20,9 @@ tools, and AI Agent runtimes — through an embedded Agent SDK.
 > Recommended for local evaluation, small private deployments, and demos. Not
 > recommended for business-critical HA production yet.
 
+Public Review readiness is tracked in
+[`docs/public-review-readiness.md`](docs/public-review-readiness.md).
+
 ## Why Capsule?
 
 AI products quietly accumulate dozens of small services. They are too small for
