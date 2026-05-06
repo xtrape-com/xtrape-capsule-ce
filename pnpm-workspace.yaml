@@ -1,4 +1,2 @@
 packages:
-  - 'xtrape-capsule-contracts-node'
-  - 'xtrape-capsule-agent-node'
   - 'packages/*'
