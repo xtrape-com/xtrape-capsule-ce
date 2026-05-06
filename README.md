@@ -222,6 +222,8 @@ standalone), and v1.0 CE Stable.
 
 This is a pnpm workspace.
 
+> **Note**: During Public Review, this repository uses workspace mirrors of external packages (`packages/contracts` and `packages/agent-node`) to validate compatibility with the independent `@xtrape/capsule-contracts-node` and `@xtrape/capsule-agent-node` repositories. These mirrors are synchronized with their upstream repositories for validation purposes.
+
 ```text
 apps/opstage-backend       # Fastify + Prisma backend
 apps/opstage-ui            # React 18 + Ant Design admin console
