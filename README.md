@@ -5,19 +5,20 @@
 > xtrape-capsule CE 是一个轻量、可私有化部署的 Capsule Service 运行态治理平台。
 
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
-[![Status: Public Preview](https://img.shields.io/badge/status-v0.1%20Public%20Preview-orange.svg)](https://xtrape-com.github.io/xtrape-capsule-site/roadmap)
+[![Status: Public Review](https://img.shields.io/badge/status-Public%20Review-orange.svg)](https://xtrape-com.github.io/xtrape-capsule-site/roadmap)
 [![Docs](https://img.shields.io/badge/docs-xtrape--capsule--site-blue.svg)](https://xtrape-com.github.io/xtrape-capsule-site/)
 
 Opstage CE is the Community Edition of [Xtrape Capsule](https://xtrape-com.github.io/xtrape-capsule-site/). It gives you one place to see, govern, and operate the small services that power AI products — integration adapters, Playwright workers, account pools, AI Agent runtimes — through an embedded Agent SDK.
 
-> **Status: v0.1 Public Preview.** Recommended for local evaluation, small private deployments, and demos. Not recommended for business-critical HA production yet.
+> **Status: Public Review · pre-v0.1 Public Preview.** Xtrape Capsule is currently in **Public Review** before the `v0.1.0 Public Preview` release. APIs, contracts, deployment instructions, and SDK interfaces may still change. Recommended for local evaluation, small private deployments, and demos. Not recommended for business-critical HA production yet.
 
 ## Why Capsule?
 
 AI products quietly accumulate dozens of small services. They are too small for a service mesh, too important to leave unmanaged, and they don't deserve a custom admin panel each. Opstage gives them a single, opinionated control plane:
 
 - **Inventory** — every Agent and every Capsule Service in one list, with `effectiveStatus`.
-- **Health** — coarse, operator-facing (`HEALTHY` / `UNHEALTHY` / `STALE` / `OFFLINE`).
+- **Health** — protocol-level health reported by Agents and Capsule Services.
+- **Effective status** — operator-facing service status derived by Opstage.
 - **Configs** — observed from each service; never pushed.
 - **Actions** — operator-callable, schema-driven, audited.
 - **Commands** — the dispatch lifecycle (`PENDING → RUNNING → SUCCEEDED / FAILED / CANCELLED / EXPIRED`).
@@ -38,9 +39,18 @@ AI products quietly accumulate dozens of small services. They are too small for 
 
 > Real product screenshots are scheduled for the v0.1.0 Public Preview release. Until then, use the public architecture diagram below and spin up the console locally with the [Quick Start](#quick-start).
 
-When the screenshots land, they will live under [`xtrape-capsule-site/public/screenshots/`](https://github.com/xtrape-com/xtrape-capsule-site/tree/main/public/screenshots) and will cover: Dashboard, Agents, Capsule Services, Service detail, Action execution, and Audit Events.
+When the screenshots land, they will live under [`xtrape-capsule-site/docs/public/screenshots/`](https://github.com/xtrape-com/xtrape-capsule-site/tree/main/docs/public/screenshots) and will cover: Dashboard, Agents, Capsule Services, Service detail, Action execution, and Audit Events.
 
 ![Xtrape Capsule architecture](https://xtrape-com.github.io/xtrape-capsule-site/diagrams/architecture.svg)
+
+TODO before `v0.1.0 Public Preview`:
+
+- Dashboard screenshot
+- Agents screenshot
+- Capsule Services screenshot
+- Service detail screenshot
+- Action execution screenshot
+- Audit events screenshot
 
 ## Architecture
 
@@ -67,6 +77,10 @@ When the screenshots land, they will live under [`xtrape-capsule-site/public/scr
 ```
 
 The Backend never opens a socket to your services. All connections are initiated outbound by the Agent — this is what makes Opstage runnable behind NAT, on a laptop, or inside customer environments.
+
+Capsule Services and Agents report protocol-level `HealthStatus` values: `UP`, `DEGRADED`, `DOWN`, `UNKNOWN`.
+
+Opstage derives operator-facing `effectiveStatus` values: `HEALTHY`, `UNHEALTHY`, `STALE`, `OFFLINE`.
 
 ## Quick Start
 
@@ -115,7 +129,7 @@ await agent.start();
 
 ## Documentation
 
-The complete public docs live at **<https://xtrape-com.github.io/xtrape-capsule-site/>**.
+The complete public docs live at [xtrape-capsule-site](https://xtrape-com.github.io/xtrape-capsule-site/).
 
 Highlights:
 
@@ -129,11 +143,11 @@ Highlights:
 
 ## Editions
 
-| Edition | Status | Highlight |
-| --- | --- | --- |
-| **CE** | Current · v0.1 Public Preview | Single-node, SQLite, self-hosted (this repo) |
-| **EE** | Future · Planned | RBAC++, SSO, HA, Secret Vault |
-| **Cloud** | Future · Planned | Hosted Opstage; Agents connect outbound |
+| Edition   | Status                                  | Highlight                                    |
+| --------- | --------------------------------------- | -------------------------------------------- |
+| **CE**    | Public Review · pre-v0.1 Public Preview | Single-node, SQLite, self-hosted (this repo) |
+| **EE**    | Future · Planned                        | RBAC++, SSO, HA, Secret Vault                |
+| **Cloud** | Future · Planned                        | Hosted Opstage; Agents connect outbound      |
 
 → [Editions comparison](https://xtrape-com.github.io/xtrape-capsule-site/editions/ce)
 
@@ -152,7 +166,7 @@ For the full safe-deployment checklist and token model, see [Security Overview](
 
 ## Roadmap
 
-`v0.1` Public Preview · Current. See the [full roadmap](https://xtrape-com.github.io/xtrape-capsule-site/roadmap) for v0.2 Basic Ops, v0.3 Capsule Spec freeze, v0.4 Agent expansion (Python / standalone), and v1.0 CE Stable.
+Public Review is current before the `v0.1.0 Public Preview` release. See the [full roadmap](https://xtrape-com.github.io/xtrape-capsule-site/roadmap) for v0.2 Basic Ops, v0.3 Capsule Spec freeze, v0.4 Agent expansion (Python / standalone), and v1.0 CE Stable.
 
 ## Development
 
@@ -187,10 +201,10 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md) for the full developer flow, and [SECUR
 
 ## Related repositories
 
-| Repo | Purpose |
-| --- | --- |
-| [xtrape-capsule-site](https://github.com/xtrape-com/xtrape-capsule-site) | Public website + documentation |
-| [xtrape-capsule-agent-node](https://github.com/xtrape-com/xtrape-capsule-agent-node) | Node embedded Agent SDK |
+| Repo                                                                                         | Purpose                          |
+| -------------------------------------------------------------------------------------------- | -------------------------------- |
+| [xtrape-capsule-site](https://github.com/xtrape-com/xtrape-capsule-site)                     | Public website + documentation   |
+| [xtrape-capsule-agent-node](https://github.com/xtrape-com/xtrape-capsule-agent-node)         | Node embedded Agent SDK          |
 | [xtrape-capsule-contracts-node](https://github.com/xtrape-com/xtrape-capsule-contracts-node) | Shared contracts and Zod schemas |
 
 ## License
