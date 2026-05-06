@@ -36,9 +36,11 @@ AI products quietly accumulate dozens of small services. They are too small for 
 
 ## Screenshots
 
-> Real product screenshots are scheduled for the v0.1.0 Public Preview release. Until then the architecture is illustrated below in plain text. You can spin up the console locally with the [Quick Start](#quick-start) and see the live UI on port `8080`.
+> Real product screenshots are scheduled for the v0.1.0 Public Preview release. Until then, use the public architecture diagram below and spin up the console locally with the [Quick Start](#quick-start).
 
 When the screenshots land, they will live under [`xtrape-capsule-site/public/screenshots/`](https://github.com/xtrape-com/xtrape-capsule-site/tree/main/public/screenshots) and will cover: Dashboard, Agents, Capsule Services, Service detail, Action execution, and Audit Events.
+
+![Xtrape Capsule architecture](https://xtrape-com.github.io/xtrape-capsule-site/diagrams/architecture.svg)
 
 ## Architecture
 
