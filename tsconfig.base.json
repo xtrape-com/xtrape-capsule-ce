@@ -10,16 +10,15 @@
     "forceConsistentCasingInFileNames": true,
     "isolatedModules": true,
     "noUncheckedIndexedAccess": true,
-    "baseUrl": ".",
     "paths": {
       "@xtrape/capsule-db": [
-        "packages/db/src/index.ts"
+        "./packages/db/src/index.ts"
       ],
       "@xtrape/capsule-shared": [
-        "packages/shared/src/index.ts"
+        "./packages/shared/src/index.ts"
       ],
       "@xtrape/capsule-test-utils": [
-        "packages/test-utils/src/index.ts"
+        "./packages/test-utils/src/index.ts"
       ]
     }
   }
