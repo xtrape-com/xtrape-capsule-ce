@@ -20,7 +20,8 @@
     "release:check": "pnpm contracts:check && pnpm db:validate && pnpm typecheck && pnpm build && pnpm test",
     "release:notes": "node -e \"const fs=require('fs'); const v=fs.readFileSync('VERSION','utf8').trim(); const text=fs.readFileSync('CHANGELOG.md','utf8'); const start=text.indexOf('## ['+v+']'); const end=text.indexOf('\\n## [', start+1); console.log(text.slice(start, end>0?end:text.length).trim())\"",
     "repo:check": "node scripts/repo-check.mjs",
-    "smoke:ui": "pnpm --filter @xtrape/opstage-ui build && pnpm --filter @xtrape/opstage-ui test"
+    "smoke:ui": "pnpm --filter @xtrape/opstage-ui build && pnpm --filter @xtrape/opstage-ui test",
+    "docker:build": "docker build -f deploy/docker/Dockerfile -t ghcr.io/xtrape-com/xtrape-capsule-ce:$(cat VERSION) ."
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

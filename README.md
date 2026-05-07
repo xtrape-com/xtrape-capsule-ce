@@ -23,6 +23,67 @@ tools, and AI Agent runtimes — through an embedded Agent SDK.
 Public Review readiness is tracked in
 [`docs/public-review-readiness.md`](docs/public-review-readiness.md).
 
+## Docker Image
+
+Public Docker images are available on GitHub Container Registry (GHCR):
+
+```bash
+# Pull the latest image
+docker pull ghcr.io/xtrape-com/xtrape-capsule-ce:latest
+
+# Pull a specific version
+docker pull ghcr.io/xtrape-com/xtrape-capsule-ce:0.1.0
+
+# Run with default configuration
+docker run -d \
+  --name opstage-ce \
+  -p 8080:8080 \
+  -v ./opstage-data:/app/data \
+  ghcr.io/xtrape-com/xtrape-capsule-ce:latest
+```
+
+> **Note**: Before exposing Opstage beyond `localhost`, copy `.env.example` to `.env` and change the default password `ChangeMeBeforeRunning123!` and session secret.
+
+## Quick Start
+
+### Option 1: Source Build (Current Default)
+
+```bash
+git clone https://github.com/xtrape-com/xtrape-capsule-ce.git
+cd xtrape-capsule-ce
+cp .env.example .env
+docker compose -f deploy/compose/docker-compose.yml up --build -d
+```
+
+### Option 2: Official Docker Image (When Available)
+
+Once published, you can use the official Docker image:
+
+```bash
+# Create environment file
+cat > .env << EOF
+OPSTAGE_HOST=0.0.0.0
+OPSTAGE_PORT=8080
+OPSTAGE_DATA_DIR=/app/data
+DATABASE_URL=file:/app/data/opstage.db
+OPSTAGE_ADMIN_USERNAME=admin@example.local
+OPSTAGE_ADMIN_PASSWORD=ChangeMeBeforeRunning123!
+OPSTAGE_SESSION_SECRET=your-very-long-random-secret-here
+OPSTAGE_PUBLIC_BASE_URL=http://localhost:8080
+EOF
+
+# Run with Docker
+docker run -d \
+  --name opstage-ce \
+  --env-file .env \
+  -p 8080:8080 \
+  -v $(pwd)/opstage-data:/app/data \
+  ghcr.io/xtrape-com/xtrape-capsule-ce:latest
+```
+
+Open `http://localhost:8080`. Default bootstrap credentials are in `.env.example`.
+**Change the password and `OPSTAGE_SESSION_SECRET` before exposing Opstage beyond `localhost`.**
+
 ## Why Capsule?
 
 AI products quietly accumulate dozens of small services. They are too small for
@@ -107,19 +168,6 @@ Capsule Services and Agents report protocol-level `HealthStatus` values: `UP`,
 Opstage derives operator-facing `effectiveStatus` values: `HEALTHY`,
 `UNHEALTHY`, `STALE`, `OFFLINE`.
 
-## Quick Start
-
-> **Warning**: The default admin password is `ChangeMeBeforeRunning123!`.
-> Change it before exposing Opstage to any network.
-
-1. Clone this repo and `cd xtrape-capsule-ce`
-2. Copy `.env.example` to `.env` and customize if needed
-3. Run `pnpm install && pnpm build`
-4. Run `pnpm start` (or `docker compose -f deploy/compose/docker-compose.yml up --build`)
-5. Visit `http://localhost:8080`
-6. Log in with:
-   - Username: `admin@example.local`
-   - Password: `ChangeMeBeforeRunning123!`
 
 ## Demo Capsule Service
 
