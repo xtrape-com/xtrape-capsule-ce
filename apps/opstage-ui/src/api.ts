@@ -91,17 +91,17 @@ export const logout = async () => {
   }
 };
 
-export async function apiDownload(path: string, options: RequestInit = {}): Promise<Blob> {
+export async function apiDownload(path: string, options: RequestInit = {}, retryOnCsrf = true): Promise<Blob> {
   const headers = new Headers(options.headers);
   if (!["GET", "HEAD"].includes((options.method ?? "GET").toUpperCase()) && csrfToken) {
     headers.set("x-csrf-token", csrfToken);
   }
   const response = await fetch(path, { ...options, headers, credentials: "include" });
-  if (response.status === 403) {
+  if (response.status === 403 && retryOnCsrf) {
     const envelope = await response.clone().json().catch(() => null) as ApiEnvelope<unknown> | null;
     if (envelope?.error?.code === "CSRF_INVALID") {
       await refreshCsrfToken();
-      return apiDownload(path, options);
+      return apiDownload(path, options, false);
     }
   }
   if (!response.ok) {

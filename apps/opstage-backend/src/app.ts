@@ -516,6 +516,14 @@ function getPagination(query: unknown): { page: number; pageSize: number; offset
 // heartbeat cadence: ~1 write per agent per heartbeat instead of 1 per request.
 const AGENT_TOKEN_LAST_USED_THROTTLE_MS = 30_000;
 
+// At-most-once-per-five-minutes-per-agent sampling of `agent.heartbeat.received`
+// audit. Heartbeats are too frequent to audit unconditionally without flooding
+// the audit log; a 5-minute window is enough to confirm "agent is alive" while
+// keeping the table small. State is process-local — first heartbeat after a
+// backend restart will produce one extra audit event, which is fine.
+const HEARTBEAT_AUDIT_INTERVAL_MS = 5 * 60_000;
+const lastHeartbeatAuditAt = new Map<string, number>();
+
 function authenticateAgent(req: FastifyRequest, db: Db, agentId: string): AgentRow {
   const authorization = req.headers.authorization ?? "";
   const token = authorization.replace(/^Bearer\s+/i, "");
@@ -1441,6 +1449,11 @@ export async function buildApp(options: BuildAppOptions = {}) {
     const body = agentHeartbeatRequestSchema.parse(req.body ?? {});
     const ts = now();
     db.prepare("update agents set status = 'ONLINE', lastHeartbeatAt = ?, updatedAt = ? where id = ?").run(ts, ts, agent.id);
+    const lastAuditMs = lastHeartbeatAuditAt.get(agent.id) ?? 0;
+    if (Date.now() - lastAuditMs >= HEARTBEAT_AUDIT_INTERVAL_MS) {
+      writeAudit(db, { actorType: "AGENT", actorId: agent.id, action: "agent.heartbeat.received", targetType: "Agent", targetId: agent.id });
+      lastHeartbeatAuditAt.set(agent.id, Date.now());
+    }
     if (body.serviceId && body.health) {
       const service = db.prepare("select * from capsule_services where id = ? and agentId = ?").get(body.serviceId, agent.id) as CapsuleServiceRow | undefined;
       if (service) {
@@ -1586,7 +1599,13 @@ export async function buildApp(options: BuildAppOptions = {}) {
       throw Object.assign(new Error("Command is already completed."), { statusCode: 409, code: "COMMAND_ALREADY_COMPLETED" });
     }
     const ts = now();
-    db.prepare("update commands set status = 'CANCELLED', completedAt = ?, updatedAt = ? where id = ?").run(ts, ts, command.id);
+    const cancelled = db.prepare(
+      "update commands set status = 'CANCELLED', completedAt = ?, updatedAt = ? where id = ? and status in ('PENDING', 'RUNNING')"
+    ).run(ts, ts, command.id).changes;
+    if (cancelled === 0) {
+      // Lost a race: another writer (result reporter, expiry sweep, parallel cancel) terminated this command.
+      throw Object.assign(new Error("Command is already completed."), { statusCode: 409, code: "COMMAND_ALREADY_COMPLETED" });
+    }
     writeAudit(db, { actorType: "USER", actorId: user.id, action: "command.cancelled", targetType: "Command", targetId: command.id });
     const row = db.prepare("select * from commands where id = ?").get(command.id) as CommandRow;
     return { success: true, data: publicCommand(row) };
@@ -1599,6 +1618,12 @@ export async function buildApp(options: BuildAppOptions = {}) {
     const commandId = (req.params as { commandId: string }).commandId;
     const command = db.prepare("select * from commands where id = ? and workspaceId = ?").get(commandId, DEFAULT_WORKSPACE.id) as CommandRow | undefined;
     if (!command) throw Object.assign(new Error("Command not found."), { statusCode: 404, code: "COMMAND_NOT_FOUND" });
+    if (command.type !== "ACTION_EXECUTE") {
+      // ACTION_PREPARE commands are short-lived UI bootstrap commands; they are
+      // re-issued automatically when the operator reopens the action panel and
+      // are not meant to be retried by hand.
+      throw Object.assign(new Error("Only ACTION_EXECUTE commands can be retried."), { statusCode: 409, code: "COMMAND_NOT_RETRYABLE" });
+    }
     if (!["FAILED", "EXPIRED", "CANCELLED"].includes(command.status)) {
       throw Object.assign(new Error("Only failed, expired, or cancelled commands can be retried."), { statusCode: 409, code: "COMMAND_NOT_RETRYABLE" });
     }
@@ -1680,14 +1705,19 @@ export async function buildApp(options: BuildAppOptions = {}) {
     const query = req.query as { limit?: string | number } | undefined;
     const limit = Math.min(10, Math.max(1, Number(query?.limit ?? 10) || 10));
     const rows = db.prepare("select * from commands where agentId = ? and status = 'PENDING' order by createdAt asc limit ?").all(agentId, limit) as CommandRow[];
+    const dispatched: CommandRow[] = [];
     for (const row of rows) {
-      db.prepare("update commands set status = 'RUNNING', startedAt = ?, updatedAt = ? where id = ? and status = 'PENDING'").run(ts, ts, row.id);
+      const claimed = db.prepare(
+        "update commands set status = 'RUNNING', startedAt = ?, updatedAt = ? where id = ? and status = 'PENDING'"
+      ).run(ts, ts, row.id).changes;
+      if (claimed === 0) continue;   // already claimed by parallel poll, expired, or cancelled — skip
       row.status = "RUNNING";
       row.startedAt = ts;
       row.updatedAt = ts;
+      dispatched.push(row);
       writeAudit(db, { actorType: "AGENT", actorId: agentId, action: "command.dispatched", targetType: "Command", targetId: row.id });
     }
-    return { success: true, data: rows.map((row) => publicCommand(row, { redactPayload: false })) };
+    return { success: true, data: dispatched.map((row) => publicCommand(row, { redactPayload: false })) };
   });
 
   app.post("/api/agents/:agentId/commands/:commandId/result", async (req) => {
@@ -1702,12 +1732,19 @@ export async function buildApp(options: BuildAppOptions = {}) {
     }
     const ts = now();
     const resultId = createId("crs");
+    const completed = db.prepare(
+      "update commands set status = ?, completedAt = ?, updatedAt = ? where id = ? and status in ('PENDING', 'RUNNING')"
+    ).run(body.success ? "SUCCEEDED" : "FAILED", ts, ts, command.id).changes;
+    if (completed === 0) {
+      throw Object.assign(new Error("Command is already completed."), { statusCode: 409, code: "COMMAND_ALREADY_COMPLETED" });
+    }
+    // Only stash the ephemeral secret once we've claimed the command — avoids leaving
+    // an orphaned entry in the in-memory map when a race loses to expiry/cancel.
     stashEphemeralCommandSecrets(command.id, body.data);
     db.prepare(`
       insert into command_results (id, commandId, agentId, success, message, dataJson, errorJson, reportedAt, createdAt)
       values (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(resultId, command.id, agent.id, body.success ? 1 : 0, body.message ?? null, safeJsonStringify(redactSecrets(body.data ?? {})), safeJsonStringify(redactSecrets(body.error ?? {})), ts, ts);
-    db.prepare("update commands set status = ?, completedAt = ?, updatedAt = ? where id = ?").run(body.success ? "SUCCEEDED" : "FAILED", ts, ts, command.id);
     writeAudit(db, { actorType: "AGENT", actorId: agent.id, action: body.success ? "command.completed" : "command.failed", targetType: "Command", targetId: command.id, result: body.success ? "SUCCESS" : "FAILURE" });
     const result = db.prepare("select * from command_results where id = ?").get(resultId) as CommandResultRow;
     return { success: true, data: publicCommandResult(result) };
