@@ -9,7 +9,7 @@ const backendConfig = {
   DATABASE_URL: `file:${join(tempDir, "opstage.db")}`,
   OPSTAGE_SESSION_SECRET: requiredSecret,
   OPSTAGE_ADMIN_USERNAME: "admin@example.local",
-  OPSTAGE_ADMIN_PASSWORD: "change-me-before-running",
+  OPSTAGE_ADMIN_PASSWORD: "ChangeMeBeforeRunning123!",
   OPSTAGE_SESSION_TTL_SECONDS: 3600,
   OPSTAGE_HOST: "127.0.0.1",
   OPSTAGE_PORT: 0

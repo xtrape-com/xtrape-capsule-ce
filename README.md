@@ -143,19 +143,60 @@ const agent = new CapsuleAgent({
   backendUrl: process.env.OPSTAGE_BACKEND_URL!,
   registrationToken: process.env.OPSTAGE_REGISTRATION_TOKEN,
   tokenStore: { file: "./data/agent-token.txt" },
+  agent: {
+    code: "my-capsule-agent",
+    name: "My Capsule Agent",
+    runtime: "nodejs",
+  },
   service: {
     code: "my-capsule",
     name: "My Capsule Service",
+    description: "A minimal Capsule Service example.",
     version: "0.1.0",
     runtime: "nodejs",
   },
-});
+})
+  .health(async () => ({
+    status: "UP",
+    message: "ok",
+  }))
+  .configs(async () => [])
+  .action({
+    name: "echo",
+    label: "Echo",
+    dangerLevel: "LOW",
+    inputSchema: {
+      type: "object",
+      required: ["message"],
+      properties: {
+        message: { type: "string", title: "Message", default: "hello" },
+      },
+    },
+    handler: async (payload) => ({
+      success: true,
+      data: { echo: payload.message },
+    }),
+  });
 
 await agent.start();
 ```
 
 →
 [Full first Capsule Service guide](https://xtrape-com.github.io/xtrape-capsule-site/getting-started/first-capsule-service)
+
+## Demo Capsule Service
+
+To see a complete runnable Capsule Service, use:
+
+https://github.com/xtrape-com/xtrape-capsule-demo
+
+The demo shows Agent registration, service manifest reporting, health/config
+reporting, action prepare/execute, command result reporting, structured list and
+detail results, and audit visibility where supported.
+
+The CE repository also includes `.env.agent.example` for the internal smoke demo
+and local Agent experiments. Keep `.env.example` for Opstage CE server settings;
+use `.env.agent.example` only for demo or Agent-side variables.
 
 ## Documentation
 

@@ -28,7 +28,7 @@ if (!license.includes("Apache License") || pkg.license !== "Apache-2.0") {
 }
 
 const env = readFileSync(".env.example", "utf8");
-const unsafe = ["OPSTAGE_SESSION_SECRET=replace-with-a-long-random-secret", "OPSTAGE_ADMIN_PASSWORD=change-me-before-running"];
+const unsafe = ["OPSTAGE_SESSION_SECRET=replace-with-a-long-random-secret", "OPSTAGE_ADMIN_PASSWORD=ChangeMeBeforeRunning123!"];
 for (const marker of unsafe) {
   if (!env.includes(marker)) {
     console.error(`.env.example should keep placeholder marker: ${marker}`);
