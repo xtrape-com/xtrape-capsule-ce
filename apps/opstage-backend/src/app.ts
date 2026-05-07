@@ -510,13 +510,20 @@ function getPagination(query: unknown): { page: number; pageSize: number; offset
   return { page, pageSize, offset: (page - 1) * pageSize };
 }
 
+// Avoid hammering SQLite with a write on every authenticated agent call. We
+// only persist a fresh `lastUsedAt` when the recorded value is older than
+// AGENT_TOKEN_LAST_USED_THROTTLE_MS. With a default of 30s this matches the
+// heartbeat cadence: ~1 write per agent per heartbeat instead of 1 per request.
+const AGENT_TOKEN_LAST_USED_THROTTLE_MS = 30_000;
+
 function authenticateAgent(req: FastifyRequest, db: Db, agentId: string): AgentRow {
   const authorization = req.headers.authorization ?? "";
   const token = authorization.replace(/^Bearer\s+/i, "");
   if (!token) {
     throw Object.assign(new Error("Agent token required."), { statusCode: 401, code: "UNAUTHORIZED" });
   }
-  const tokenRow = db.prepare("select * from agent_tokens where tokenHash = ? and status = 'ACTIVE' and revokedAt is null").get(hashToken(token)) as { agentId: string } | undefined;
+  const tokenHash = hashToken(token);
+  const tokenRow = db.prepare("select * from agent_tokens where tokenHash = ? and status = 'ACTIVE' and revokedAt is null").get(tokenHash) as { agentId: string; lastUsedAt: string | null } | undefined;
   if (!tokenRow || tokenRow.agentId !== agentId) {
     throw Object.assign(new Error("Invalid Agent token."), { statusCode: 401, code: "UNAUTHORIZED" });
   }
@@ -527,7 +534,11 @@ function authenticateAgent(req: FastifyRequest, db: Db, agentId: string): AgentR
   if (agent.status === "DISABLED" || agent.status === "REVOKED") {
     throw Object.assign(new Error(`Agent is ${agent.status.toLowerCase()}.`), { statusCode: 403, code: `AGENT_${agent.status}` });
   }
-  db.prepare("update agent_tokens set lastUsedAt = ?, updatedAt = ? where tokenHash = ?").run(now(), now(), hashToken(token));
+  const ts = now();
+  const lastUsedMs = tokenRow.lastUsedAt ? Date.parse(tokenRow.lastUsedAt) : 0;
+  if (Date.now() - lastUsedMs >= AGENT_TOKEN_LAST_USED_THROTTLE_MS) {
+    db.prepare("update agent_tokens set lastUsedAt = ?, updatedAt = ? where tokenHash = ?").run(ts, ts, tokenHash);
+  }
   return agent;
 }
 
