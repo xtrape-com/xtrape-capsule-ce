@@ -25,22 +25,7 @@ Public Review readiness is tracked in
 
 ## Docker Image
 
-Public Docker images are available on GitHub Container Registry (GHCR):
-
-```bash
-# Pull the latest image
-docker pull ghcr.io/xtrape-com/xtrape-capsule-ce:latest
-
-# Pull a specific version
-docker pull ghcr.io/xtrape-com/xtrape-capsule-ce:0.1.0
-
-# Run with default configuration
-docker run -d \
-  --name opstage-ce \
-  -p 8080:8080 \
-  -v ./opstage-data:/app/data \
-  ghcr.io/xtrape-com/xtrape-capsule-ce:latest
-```
+During Public Review, the source-build Docker Compose path remains the canonical quick-start path. GHCR images may be produced from `main` for validation, but the stable `ghcr.io/xtrape-com/xtrape-capsule-ce:0.1.0` image becomes the primary documented path only after the `v0.1.0 Public Preview` cut.
 
 > **Note**: Before exposing Opstage beyond `localhost`, copy `.env.example` to `.env` and change the default password `ChangeMeBeforeRunning123!` and session secret.
 
@@ -55,9 +40,9 @@ cp .env.example .env
 docker compose -f deploy/compose/docker-compose.yml up --build -d
 ```
 
-### Option 2: Official Docker Image (When Available)
+### Option 2: Official Docker Image (After v0.1.0 Cut)
 
-Once published, you can use the official Docker image:
+After the `v0.1.0 Public Preview` cut, use the pinned official Docker image:
 
 ```bash
 # Create environment file
@@ -78,7 +63,7 @@ docker run -d \
   --env-file .env \
   -p 8080:8080 \
   -v $(pwd)/opstage-data:/app/data \
-  ghcr.io/xtrape-com/xtrape-capsule-ce:latest
+  ghcr.io/xtrape-com/xtrape-capsule-ce:0.1.0
 ```
 
 Open `http://localhost:8080`. Default bootstrap credentials are in `.env.example`.
