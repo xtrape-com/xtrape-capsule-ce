@@ -48,6 +48,7 @@ custom admin panel each. Opstage gives them a single, opinionated control plane:
 - Maintenance scheduler (offline detection, expiry, audit pruning)
 - Metrics, diagnostics, audit export, owner-only SQLite backup
 - Schema-driven action panels with `ACTION_PREPARE` → `ACTION_EXECUTE`
+- Structured action results for table-style lists, row actions, and detail views
 - UI in English and 中文 (selected language stored in `localStorage`)
 
 ## Screenshots
