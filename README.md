@@ -109,80 +109,17 @@ Opstage derives operator-facing `effectiveStatus` values: `HEALTHY`,
 
 ## Quick Start
 
-> Public Docker images are planned for the v0.1.0 release. Until then, build
-> locally with the Compose path below.
+> **Warning**: The default admin password is `ChangeMeBeforeRunning123!`.
+> Change it before exposing Opstage to any network.
 
-```bash
-git clone https://github.com/xtrape-com/xtrape-capsule-ce.git
-cd xtrape-capsule-ce
-cp .env.example .env
-# edit OPSTAGE_ADMIN_PASSWORD and OPSTAGE_SESSION_SECRET in .env
-docker compose -f deploy/compose/docker-compose.yml up --build -d
-```
-
-Open `http://localhost:8080`. Default bootstrap credentials come from
-`.env.example`:
-
-```text
-Username: admin@example.local
-Password: ChangeMeBeforeRunning123!
-```
-
-→
-[Full Quick Start guide](https://xtrape-com.github.io/xtrape-capsule-site/getting-started/quick-start)
-
-## Connect your first Capsule Service
-
-Use the Node embedded Agent SDK
-([`@xtrape/capsule-agent-node`](https://github.com/xtrape-com/xtrape-capsule-agent-node)):
-
-```ts
-import { CapsuleAgent } from "@xtrape/capsule-agent-node";
-
-const agent = new CapsuleAgent({
-  backendUrl: process.env.OPSTAGE_BACKEND_URL!,
-  registrationToken: process.env.OPSTAGE_REGISTRATION_TOKEN,
-  tokenStore: { file: "./data/agent-token.txt" },
-  agent: {
-    code: "my-capsule-agent",
-    name: "My Capsule Agent",
-    runtime: "nodejs",
-  },
-  service: {
-    code: "my-capsule",
-    name: "My Capsule Service",
-    description: "A minimal Capsule Service example.",
-    version: "0.1.0",
-    runtime: "nodejs",
-  },
-})
-  .health(async () => ({
-    status: "UP",
-    message: "ok",
-  }))
-  .configs(async () => [])
-  .action({
-    name: "echo",
-    label: "Echo",
-    dangerLevel: "LOW",
-    inputSchema: {
-      type: "object",
-      required: ["message"],
-      properties: {
-        message: { type: "string", title: "Message", default: "hello" },
-      },
-    },
-    handler: async (payload) => ({
-      success: true,
-      data: { echo: payload.message },
-    }),
-  });
-
-await agent.start();
-```
-
-→
-[Full first Capsule Service guide](https://xtrape-com.github.io/xtrape-capsule-site/getting-started/first-capsule-service)
+1. Clone this repo and `cd xtrape-capsule-ce`
+2. Copy `.env.example` to `.env` and customize if needed
+3. Run `pnpm install && pnpm build`
+4. Run `pnpm start` (or `docker compose -f deploy/compose/docker-compose.yml up --build`)
+5. Visit `http://localhost:8080`
+6. Log in with:
+   - Username: `admin@example.local`
+   - Password: `ChangeMeBeforeRunning123!`
 
 ## Demo Capsule Service
 
@@ -190,75 +127,7 @@ To see a complete runnable Capsule Service, use:
 
 https://github.com/xtrape-com/xtrape-capsule-demo
 
-The demo shows Agent registration, service manifest reporting, health/config
-reporting, action prepare/execute, command result reporting, structured list and
-detail results, and audit visibility where supported.
-
-The CE repository also includes `.env.agent.example` for the internal smoke demo
-and local Agent experiments. Keep `.env.example` for Opstage CE server settings;
-use `.env.agent.example` only for demo or Agent-side variables.
-
-## Documentation
-
-The complete public docs live at [xtrape-capsule-site](https://xtrape-com.github.io/xtrape-capsule-site/).
-
-Highlights:
-
-- [Quick Start](https://xtrape-com.github.io/xtrape-capsule-site/getting-started/quick-start)
-- [First Capsule Service](https://xtrape-com.github.io/xtrape-capsule-site/getting-started/first-capsule-service)
-- [Concepts](https://xtrape-com.github.io/xtrape-capsule-site/concepts/capsule-service)
-  — Capsule Service / Opstage / Agent / Registration / Management Contract
-- [Opstage CE](https://xtrape-com.github.io/xtrape-capsule-site/opstage-ce/overview)
-  — overview, Docker, configuration, admin UI, backup & upgrade
-- [Agents](https://xtrape-com.github.io/xtrape-capsule-site/agents/node-embedded-agent)
-  — Node embedded SDK, action model, health & config reporting
-- [Security](https://xtrape-com.github.io/xtrape-capsule-site/security/overview)
-  — token model, agent security, safe-deployment checklist
-- [Roadmap](https://xtrape-com.github.io/xtrape-capsule-site/roadmap),
-  [FAQ](https://xtrape-com.github.io/xtrape-capsule-site/faq),
-  [Glossary](https://xtrape-com.github.io/xtrape-capsule-site/glossary)
-
-## Editions
-
-| Edition   | Status                                  | Highlight                                    |
-| --------- | --------------------------------------- | -------------------------------------------- |
-| **CE**    | Public Review · pre-v0.1 Public Preview | Single-node, SQLite, self-hosted (this repo) |
-| **EE**    | Future · Planned                        | RBAC++, SSO, HA, Secret Vault                |
-| **Cloud** | Future · Planned                        | Hosted Opstage; Agents connect outbound      |
-
-→
-[Editions comparison](https://xtrape-com.github.io/xtrape-capsule-site/editions/ce)
-
-## Security Notes
-
-CE is **not hardened for unattended public-internet exposure**. Before deploying
-anywhere reachable from the open internet:
-
-- Set a strong `OPSTAGE_SESSION_SECRET` and a non-default admin password.
-- Put Opstage behind a reverse proxy that terminates TLS, preserves the session
-  cookie, and forwards `X-CSRF-Token`.
-- Add an additional access layer (VPN, IP allow-list, SSO at the proxy). CE has
-  no built-in IP allow-list, no rate-limit on the admin login, no SSO.
-- Restrict the Agent token file's permissions on every host running an Agent
-  (`chmod 600`).
-- Treat each Action your service exposes as a remotely-callable authority
-  boundary; validate payloads server-side and use `requiresConfirmation` for
-  destructive operations.
-- Never report secrets in
-  [config reporting](https://xtrape-com.github.io/xtrape-capsule-site/agents/config-reporting);
-  mark sensitive keys with `sensitive: true` and omit their values.
-
-For the full safe-deployment checklist and token model, see
-[Security Overview](https://xtrape-com.github.io/xtrape-capsule-site/security/overview)
-on the public site, plus this repo's [SECURITY.md](./SECURITY.md) for
-vulnerability reporting.
-
-## Roadmap
-
-Public Review is current before the `v0.1.0 Public Preview` release. See the
-[full roadmap](https://xtrape-com.github.io/xtrape-capsule-site/roadmap) for
-v0.2 Basic Ops, v0.3 Capsule Spec freeze, v0.4 Agent expansion (Python /
-standalone), and v1.0 CE Stable.
+The demo shows Agent registration, service manifest reporting, health/config reporting, action prepare/execute, command result reporting, and audit visibility.
 
 ## Development
 

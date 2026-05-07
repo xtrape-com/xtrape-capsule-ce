@@ -79,4 +79,4 @@ pnpm build
 - [ ] Public Review feedback issue or issue template exists.
 - [ ] Live site is accessible.
 - [ ] `xtrape-capsule-docs` remains private and is not used as the public
-  review entry point.
+      review entry point.
