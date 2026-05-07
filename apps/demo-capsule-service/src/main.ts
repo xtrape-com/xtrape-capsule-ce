@@ -2,7 +2,7 @@ import { CapsuleAgent } from "@xtrape/capsule-agent-node";
 
 const backendUrl = process.env.OPSTAGE_BACKEND_URL ?? "http://localhost:8080";
 const registrationToken = process.env.OPSTAGE_REGISTRATION_TOKEN;
-const tokenFile = process.env.OPSTAGE_AGENT_TOKEN_FILE ?? "./data/agent-token.json";
+const tokenFile = process.env.OPSTAGE_AGENT_TOKEN_FILE ?? "./data/agent-token.txt";
 const autoStartLoops = process.env.OPSTAGE_AGENT_AUTOSTART_LOOPS !== "false";
 
 if (!registrationToken) {
@@ -16,20 +16,16 @@ const agent = new CapsuleAgent({
     file: tokenFile
   },
   autoStartLoops,
+  // The SDK builds a default manifest from `service` (kind, schemaVersion,
+  // code, name, description, version, runtime, agentMode), so we don't
+  // duplicate those fields under `manifest`. Use `manifest` only for
+  // optional pass-through metadata such as labels.
   service: {
     code: process.env.DEMO_SERVICE_CODE ?? "demo-capsule-service",
     name: process.env.DEMO_SERVICE_NAME ?? "Demo Capsule Service",
     description: "A demo Capsule Service for Opstage CE.",
     version: "0.1.0",
-    runtime: "nodejs",
-    manifest: {
-      kind: "CapsuleService",
-      code: process.env.DEMO_SERVICE_CODE ?? "demo-capsule-service",
-      name: process.env.DEMO_SERVICE_NAME ?? "Demo Capsule Service",
-      description: "A demo Capsule Service for Opstage CE.",
-      version: "0.1.0",
-      runtime: "nodejs"
-    }
+    runtime: "nodejs"
   }
 });
 

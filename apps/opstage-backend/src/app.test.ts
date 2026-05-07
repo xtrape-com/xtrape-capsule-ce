@@ -3,6 +3,14 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_WORKSPACE, openDatabase } from "@xtrape/capsule-db";
+
+// Provide the required env *before* importing buildApp, because buildApp's
+// module path eventually calls loadConfig(process.env) which validates the
+// schema. The per-test `config` object below still wins via the override
+// merge inside buildApp; this just keeps the schema check happy.
+process.env.OPSTAGE_SESSION_SECRET =
+  process.env.OPSTAGE_SESSION_SECRET ?? "test-session-secret-must-be-at-least-32-chars";
+
 import { buildApp } from "./app.js";
 
 const config = {
@@ -310,6 +318,96 @@ describe("Phase 2 agent registration and service report", () => {
       payload: {}
     });
     expect(heartbeat.statusCode).toBe(401);
+    await app.close();
+  });
+
+  it("revokes the prior agent token when an agent re-registers", async () => {
+    const app = await buildApp({ logger: false, config });
+    const login = await app.inject({
+      method: "POST",
+      url: "/api/admin/auth/login",
+      payload: {
+        username: config.OPSTAGE_ADMIN_USERNAME,
+        password: config.OPSTAGE_ADMIN_PASSWORD
+      }
+    });
+    const cookie = login.cookies.find(item => item.name === "opstage_session")!;
+    const csrfToken = login.json().data.csrfToken as string;
+
+    const issueToken = async (name: string) => {
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/admin/registration-tokens",
+        cookies: { opstage_session: cookie.value },
+        headers: { "x-csrf-token": csrfToken },
+        payload: { name, expiresInSeconds: 3600 }
+      });
+      expect(res.statusCode).toBe(200);
+      return res.json().data.token as string;
+    };
+
+    // First registration with token A
+    const tokA = await issueToken("first");
+    const reg1 = await app.inject({
+      method: "POST",
+      url: "/api/agents/register",
+      payload: { registrationToken: tokA, agent: { code: "rotating-agent", mode: "embedded" } }
+    });
+    expect(reg1.statusCode).toBe(200);
+    const agentId = reg1.json().data.agentId as string;
+    const oldAgentToken = reg1.json().data.agentToken as string;
+
+    // Confirm token A is currently good
+    const heartbeatA = await app.inject({
+      method: "POST",
+      url: `/api/agents/${agentId}/heartbeat`,
+      headers: { authorization: `Bearer ${oldAgentToken}` },
+      payload: {}
+    });
+    expect(heartbeatA.statusCode).toBe(200);
+
+    // Second registration with token B — same agent code, simulates "lost token, re-register"
+    const tokB = await issueToken("second");
+    const reg2 = await app.inject({
+      method: "POST",
+      url: "/api/agents/register",
+      payload: { registrationToken: tokB, agent: { code: "rotating-agent", mode: "embedded" } }
+    });
+    expect(reg2.statusCode).toBe(200);
+    expect(reg2.json().data.agentId).toBe(agentId); // same agent identity preserved
+    const newAgentToken = reg2.json().data.agentToken as string;
+    expect(newAgentToken).not.toBe(oldAgentToken);
+
+    // Old token must now be rejected
+    const heartbeatOld = await app.inject({
+      method: "POST",
+      url: `/api/agents/${agentId}/heartbeat`,
+      headers: { authorization: `Bearer ${oldAgentToken}` },
+      payload: {}
+    });
+    expect(heartbeatOld.statusCode).toBe(401);
+
+    // New token works
+    const heartbeatNew = await app.inject({
+      method: "POST",
+      url: `/api/agents/${agentId}/heartbeat`,
+      headers: { authorization: `Bearer ${newAgentToken}` },
+      payload: {}
+    });
+    expect(heartbeatNew.statusCode).toBe(200);
+
+    // The rotation produced an audit event
+    const auditRes = await app.inject({
+      method: "GET",
+      url: "/api/admin/audit-events?action=agent.token.rotated",
+      cookies: { opstage_session: cookie.value }
+    });
+    expect(auditRes.statusCode).toBe(200);
+    const events = auditRes.json().data as Array<{ targetId: string; metadata?: { previousActiveCount?: number } }>;
+    const rotation = events.find(e => e.targetId === agentId);
+    expect(rotation).toBeDefined();
+    expect(rotation?.metadata?.previousActiveCount).toBe(1);
+
     await app.close();
   });
 });

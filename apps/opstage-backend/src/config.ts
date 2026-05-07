@@ -6,7 +6,9 @@ const envSchema = z.object({
   DATABASE_URL: z.string().default("file:./data/opstage.db"),
   OPSTAGE_ADMIN_USERNAME: z.string().min(1).optional(),
   OPSTAGE_ADMIN_PASSWORD: z.string().min(12).optional(),
-  OPSTAGE_SESSION_SECRET: z.string().min(32).optional(),
+  OPSTAGE_SESSION_SECRET: z
+    .string({ required_error: "OPSTAGE_SESSION_SECRET is required (>=32 chars)" })
+    .min(32, "OPSTAGE_SESSION_SECRET must be at least 32 chars"),
   OPSTAGE_SESSION_TTL_SECONDS: z.coerce.number().int().positive().default(28800),
   OPSTAGE_STATIC_DIR: z.string().default("apps/opstage-ui/dist"),
   OPSTAGE_AGENT_OFFLINE_THRESHOLD_SECONDS: z.coerce.number().int().positive().default(90),

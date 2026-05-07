@@ -1073,7 +1073,10 @@ export async function buildApp(options: BuildAppOptions = {}) {
     reply.setCookie("opstage_session", signSessionId(sessionId, sessionSecret), {
       httpOnly: true,
       sameSite: "lax",
-      secure: config.NODE_ENV === "production",
+      // Default Secure on. Only opt out for explicit dev/test where the UI
+      // serves over plain HTTP. Avoids the foot-gun of a cookie missing the
+      // Secure flag in staging/preview deployments where NODE_ENV is unset.
+      secure: config.NODE_ENV !== "development" && config.NODE_ENV !== "test",
       path: "/",
       maxAge: config.OPSTAGE_SESSION_TTL_SECONDS
     });
@@ -1433,12 +1436,35 @@ export async function buildApp(options: BuildAppOptions = {}) {
       `).run(agentId, DEFAULT_WORKSPACE.id, body.agent.code, body.agent.name ?? null, body.agent.mode, body.agent.runtime ?? null, "ONLINE", ts, ts, ts);
     }
 
+    // Re-registration must rotate: any previously ACTIVE agent token is
+    // immediately revoked so a leaked token from before the re-register
+    // can no longer impersonate the agent. Operators rely on
+    // "create new registration token + restart agent" as a credential-
+    // rotation lever; without this revoke, the lever does nothing.
+    const revokedTokens = existing
+      ? db.prepare(
+          "update agent_tokens set status='REVOKED', revokedAt=?, updatedAt=? where agentId=? and status='ACTIVE'"
+        ).run(ts, ts, agentId).changes
+      : 0;
     const agentToken = newToken("opstage_agent_");
     db.prepare("insert into agent_tokens (id, agentId, tokenHash, status, createdAt, updatedAt) values (?, ?, ?, 'ACTIVE', ?, ?)").run(createId("tok"), agentId, agentToken.hash, ts, ts);
     db.prepare("update registration_tokens set status = 'USED', agentId = ?, usedAt = ?, updatedAt = ? where id = ?").run(agentId, ts, ts, registrationToken.id);
     const agent = db.prepare("select * from agents where id = ?").get(agentId) as AgentRow;
     if (body.service) upsertReportedService(db, agent, body.service);
     writeAudit(db, { actorType: "AGENT", actorId: agentId, action: "registration_token.consumed", targetType: "RegistrationToken", targetId: registrationToken.id });
+    if (revokedTokens > 0) {
+      writeAudit(db, {
+        actorType: "AGENT",
+        actorId: agentId,
+        action: "agent.token.rotated",
+        targetType: "Agent",
+        targetId: agentId,
+        // Use a key that doesn't trip redactSecrets's `/token/` match — the
+        // redactor walks audit metadata too, and any key containing "token"
+        // would have its numeric value replaced with [REDACTED].
+        metadata: { previousActiveCount: revokedTokens },
+      });
+    }
     writeAudit(db, { actorType: "AGENT", actorId: agentId, action: "agent.registered", targetType: "Agent", targetId: agentId });
     return { success: true, data: { agentId, agentToken: agentToken.raw, heartbeatIntervalSeconds: 30, commandPollIntervalSeconds: 5 } };
   });
