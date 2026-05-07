@@ -15,7 +15,9 @@ interface ConfigItem { id: string; configKey: string; label?: string | null; typ
 interface Command { id: string; agentId: string; serviceId: string; type: string; actionName: string; status: string; payload: Record<string, unknown>; errorCode?: string | null; errorMessage?: string | null; createdAt: string; updatedAt: string; startedAt?: string | null; completedAt?: string | null; result?: Record<string, unknown> | null }
 interface ResultListColumn { key: string; label?: string; format?: "text" | "status" | "datetime" | "boolean" | "code" | "duration" | "relativeTime" | "bytes"; copyable?: boolean; ellipsis?: boolean; width?: number | string }
 interface ResultListRowAction { label: string; action: string; payload?: Record<string, unknown>; danger?: boolean; confirm?: boolean }
-interface ResultListMeta { title?: string; data?: Record<string, unknown>[]; columns?: ResultListColumn[]; rowActions?: ResultListRowAction[]; emptyText?: string; pageSize?: number }
+interface ResultListMeta { title?: string; data?: Record<string, unknown>[]; columns?: ResultListColumn[]; rowActions?: ResultListRowAction[]; pageActions?: ResultListRowAction[]; emptyText?: string; pageSize?: number }
+interface ResultDetailField { key: string; label?: string; format?: ResultListColumn["format"]; copyable?: boolean }
+interface ResultDetailMeta { title?: string; data?: Record<string, unknown>; fields?: ResultDetailField[]; actions?: ResultListRowAction[] }
 interface AccountStatus { id?: string; label?: string; emailMasked?: string; enabled?: boolean; healthy?: boolean; operationStatus?: string; operationName?: string; operationMessage?: string; cooldownRemainingMs?: number; consecutiveFailures?: number; loginVerifiedAt?: number; lastError?: string }
 interface User { id: string; username: string; displayName?: string | null; role: string; status: string; lastLoginAt?: string | null; createdAt: string; updatedAt: string }
 interface AuditEvent { id: string; actorType: string; actorId?: string | null; action: string; targetType?: string | null; targetId?: string | null; result: string; message?: string | null; metadata: Record<string, unknown>; createdAt: string }
@@ -375,7 +377,7 @@ function Services() {
 }
 
 
-const actionCategoryOrder = ["account", "api-key", "session", "runtime-config", "diagnostics", "advanced", "other"];
+const actionCategoryOrder = ["account", "item-management", "api-key", "session", "runtime-config", "diagnostics", "advanced", "other"];
 
 function actionCategoryLabel(category: string, t: (key: never, vars?: Record<string, string | number>) => string) {
   const key = `actionCategory.${category}`;
@@ -386,6 +388,7 @@ function actionCategoryLabel(category: string, t: (key: never, vars?: Record<str
 function groupActions(actions: Action[] | undefined) {
   const groups = new Map<string, Action[]>();
   for (const action of actions ?? []) {
+    if (action.category === "page-action" || action.category === "row-action") continue;
     const category = action.category || "other";
     groups.set(category, [...(groups.get(category) ?? []), action]);
   }
@@ -492,6 +495,17 @@ function resultListFromCommand(command: Command | null): ResultListMeta | undefi
   return Array.isArray(meta.data) ? meta : undefined;
 }
 
+function resultDetailFromCommand(command: Command | null): ResultDetailMeta | undefined {
+  return resultDetailFromValue(actionResultData(command)?.detail);
+}
+
+function resultDetailFromValue(value: unknown): ResultDetailMeta | undefined {
+  const detail = value;
+  if (!detail || typeof detail !== "object" || Array.isArray(detail)) return undefined;
+  const meta = detail as ResultDetailMeta;
+  return meta.data && typeof meta.data === "object" && !Array.isArray(meta.data) ? meta : undefined;
+}
+
 function inferListColumns(rows: Record<string, unknown>[]): ResultListColumn[] {
   const first = rows[0];
   if (!first) return [];
@@ -570,9 +584,26 @@ export function resultRowKey(row: Record<string, unknown>, index?: number): stri
   return String(row.id ?? row.key ?? row.name ?? index ?? JSON.stringify(row));
 }
 
-function ActionResultList({ command, service, onRunAction }: { command: Command | null; service: Service | null; onRunAction: (actionName: string, payload: Record<string, unknown>, confirmation?: boolean) => Promise<void> }) {
+function ResultActionButton({ rowAction, row, rowKey, service, onOpenAction }: { rowAction: ResultListRowAction; row: Record<string, unknown>; rowKey: string; service: Service | null; onOpenAction: (actionName: string, payload: Record<string, unknown>) => Promise<void> }) {
   const { t } = useI18n();
   const [runningRowActionKey, setRunningRowActionKey] = React.useState<string | null>(null);
+  const actionKey = `${rowKey}:${rowAction.action}:${rowAction.label}`;
+  const sameRowRunning = Boolean(runningRowActionKey?.startsWith(`${rowKey}:`));
+  const isRunning = runningRowActionKey === actionKey;
+  const targetAction = service?.actions?.find((item) => item.name === rowAction.action);
+  const run = async () => {
+    setRunningRowActionKey(actionKey);
+    try {
+      await onOpenAction(rowAction.action, resolveRowPayload(rowAction.payload, row));
+    } finally {
+      setRunningRowActionKey(null);
+    }
+  };
+  return <Button key={actionKey} size="small" loading={isRunning} danger={rowAction.danger || targetAction?.requiresConfirmation} disabled={!targetAction || (sameRowRunning && !isRunning)} onClick={() => void run()}>{rowAction.label}</Button>;
+}
+
+function ActionResultList({ command, service, onOpenAction }: { command: Command | null; service: Service | null; onOpenAction: (actionName: string, payload: Record<string, unknown>) => Promise<void> }) {
+  const { t } = useI18n();
   const list = resultListFromCommand(command);
   if (!list) return null;
   const rows = list.data ?? [];
@@ -587,30 +618,16 @@ function ActionResultList({ command, service, onRunAction }: { command: Command 
   if (list.rowActions?.length) {
     tableColumns.push({
       title: t("common.actions"),
-      render: (_value, row, index) => <Space wrap>{list.rowActions!.map((rowAction) => {
-        const actionKey = `${resultRowKey(row, index)}:${rowAction.action}:${rowAction.label}`;
-        const rowKey = resultRowKey(row, index);
-        const sameRowRunning = Boolean(runningRowActionKey?.startsWith(`${rowKey}:`));
-        const isRunning = runningRowActionKey === actionKey;
-        const targetAction = service?.actions?.find((item) => item.name === rowAction.action);
-        const needsConfirm = Boolean(rowAction.confirm || targetAction?.requiresConfirmation);
-        const run = async () => {
-          setRunningRowActionKey(actionKey);
-          try {
-            await onRunAction(rowAction.action, resolveRowPayload(rowAction.payload, row), needsConfirm);
-          } finally {
-            setRunningRowActionKey(null);
-          }
-        };
-        const button = <Button size="small" loading={isRunning} danger={rowAction.danger || targetAction?.requiresConfirmation} disabled={!targetAction || (sameRowRunning && !isRunning)} onClick={() => !needsConfirm && void run()}>{rowAction.label}</Button>;
-        return needsConfirm
-          ? <Popconfirm key={actionKey} title={t("confirm.runRowAction", { label: rowAction.label })} onConfirm={() => void run()}>{button}</Popconfirm>
-          : <span key={actionKey}>{button}</span>;
-      })}</Space>,
+      render: (_value, row, index) => <Space wrap>{list.rowActions!.map((rowAction) => <ResultActionButton key={`${resultRowKey(row, index)}:${rowAction.action}:${rowAction.label}`} rowAction={rowAction} row={row} rowKey={resultRowKey(row, index)} service={service} onOpenAction={onOpenAction} />)}</Space>,
     });
   }
   const pageSize = Number.isFinite(Number(list.pageSize)) && Number(list.pageSize) > 0 ? Number(list.pageSize) : 10;
-  return <Card size="small" title={<Space>{list.title ?? "List"}<Tag>{t("service.listRowCount", { count: rows.length })}</Tag></Space>} style={{ marginTop: 16 }}>
+  return <Card
+    size="small"
+    title={<Space>{list.title ?? "List"}<Tag>{t("service.listRowCount", { count: rows.length })}</Tag></Space>}
+    extra={list.pageActions?.length ? <Space wrap>{list.pageActions.map((pageAction) => <ResultActionButton key={`page:${pageAction.action}:${pageAction.label}`} rowAction={pageAction} row={{}} rowKey="page" service={service} onOpenAction={onOpenAction} />)}</Space> : null}
+    style={{ marginTop: 16 }}
+  >
     <Table
       size="small"
       rowKey={resultRowKey}
@@ -622,11 +639,40 @@ function ActionResultList({ command, service, onRunAction }: { command: Command 
   </Card>;
 }
 
+function ActionResultDetail({ command, service, onOpenAction }: { command: Command | null; service: Service | null; onOpenAction: (actionName: string, payload: Record<string, unknown>) => Promise<void> }) {
+  const detail = resultDetailFromCommand(command);
+  if (!detail) return null;
+  return <ActionDetailCard detail={detail} service={service} onOpenAction={onOpenAction} />;
+}
+
+function ActionDetailCard({ detail, service, onOpenAction }: { detail: ResultDetailMeta; service: Service | null; onOpenAction: (actionName: string, payload: Record<string, unknown>) => Promise<void> }) {
+  const data = detail.data ?? {};
+  const fields: ResultDetailField[] = detail.fields?.length ? detail.fields : Object.keys(data).slice(0, 12).map((key) => ({ key, label: key }));
+  return <Card
+    size="small"
+    title={detail.title ?? "Detail"}
+    extra={detail.actions?.length ? <Space wrap>{detail.actions.map((action) => <ResultActionButton key={`detail:${action.action}:${action.label}`} rowAction={action} row={data} rowKey={String(data.id ?? "detail")} service={service} onOpenAction={onOpenAction} />)}</Space> : null}
+    style={{ marginTop: 16 }}
+  >
+    <Descriptions
+      bordered
+      size="small"
+      column={1}
+      items={fields.map((field) => ({
+        key: field.key,
+        label: field.label ?? field.key,
+        children: renderListCell(getPathValue(data, field.key), { key: field.key, format: field.format, copyable: field.copyable }),
+      }))}
+    />
+  </Card>;
+}
+
 function ServiceDrawer({ service, refreshing, onClose, onRefresh, onCommandCreated }: { service: Service | null; refreshing?: boolean; onClose: () => void; onRefresh: () => void; onCommandCreated: () => void }) {
   const { t } = useI18n();
   const [action, setAction] = React.useState<Action | null>(null);
   const [payload, setPayload] = React.useState("{}");
   const [initialPayload, setInitialPayload] = React.useState<Record<string, unknown> | undefined>(undefined);
+  const [preparedDetail, setPreparedDetail] = React.useState<ResultDetailMeta | undefined>(undefined);
   const [commandResult, setCommandResult] = React.useState<Command | null>(null);
   const [commandRunning, setCommandRunning] = React.useState(false);
   const [prepareLoading, setPrepareLoading] = React.useState(false);
@@ -705,17 +751,6 @@ function ServiceDrawer({ service, refreshing, onClose, onRefresh, onCommandCreat
     await executeNamedAction(action.name, parsed, false, { silent: true });
   }
 
-  async function executeRowAction(actionName: string, nextPayload: Record<string, unknown>, confirmation?: boolean): Promise<void> {
-    const targetAction = service?.actions?.find((item) => item.name === actionName);
-    const result = await executeNamedAction(actionName, nextPayload, confirmation);
-    if (!result) return;
-    if (targetAction && isLongRunningAction(targetAction) && !isTerminalCommandStatus(result.status)) {
-      setRefreshAfterCommandId(result.id);
-      return;
-    }
-    if (isTerminalCommandStatus(result.status)) await refreshCurrentActionResult();
-  }
-
   const submitAction = async () => {
     if (!service || !action) return;
     let parsed: Record<string, unknown> = {};
@@ -725,15 +760,17 @@ function ServiceDrawer({ service, refreshing, onClose, onRefresh, onCommandCreat
     setRefreshAfterCommandId(null);
     await executeNamedAction(action.name, parsed, action.requiresConfirmation);
   };
-  const openAction = async (next: Action) => {
+  const openAction = async (next: Action, payloadOverride?: Record<string, unknown>) => {
     const requestSeq = ++prepareRequestSeq.current;
+    const { __detail, ...payloadOverrideForRequest } = payloadOverride ?? {};
     setAction(next);
-    setPayload(JSON.stringify(defaultPayloadForAction(next), null, 2));
+    setPayload(JSON.stringify({ ...defaultPayloadForAction(next), ...payloadOverrideForRequest }, null, 2));
     setCommandResult(null);
     setCommandRunning(false);
     setAutoPollCommandId(null);
     setRefreshAfterCommandId(null);
     setInitialPayload(undefined);
+    setPreparedDetail(resultDetailFromValue(__detail));
     setPrepareError(null);
     if (!service) return;
     setPrepareLoading(true);
@@ -743,9 +780,10 @@ function ServiceDrawer({ service, refreshing, onClose, onRefresh, onCommandCreat
     try {
       const prepared = await apiFetch<ActionPrepare>(`/api/admin/capsule-services/${service.id}/actions/${next.name}`);
       if (requestSeq !== prepareRequestSeq.current) return;
-      const nextPayload = prepared.initialPayload ?? defaultPayloadForAction(prepared.action);
+      const nextPayload = { ...(prepared.initialPayload ?? defaultPayloadForAction(prepared.action)), ...payloadOverrideForRequest };
       setAction(prepared.action);
       setInitialPayload(nextPayload);
+      setPreparedDetail(resultDetailFromValue(__detail) ?? resultDetailFromValue(prepared.currentState?.detail));
       setPayload(JSON.stringify(nextPayload, null, 2));
     } catch (err) {
       if (requestSeq !== prepareRequestSeq.current) return;
@@ -761,6 +799,14 @@ function ServiceDrawer({ service, refreshing, onClose, onRefresh, onCommandCreat
         setPrepareStartedAt(null);
       }
     }
+  };
+  const openContextAction = async (actionName: string, nextPayload: Record<string, unknown>) => {
+    const targetAction = service?.actions?.find((item) => item.name === actionName);
+    if (!targetAction) {
+      message.error(`Action not found: ${actionName}`);
+      return;
+    }
+    await openAction(targetAction, nextPayload);
   };
   return <Drawer open={!!service} onClose={onClose} title={service?.name} width={860} extra={<Button disabled={!service} loading={refreshing} onClick={onRefresh}>{t("action.refresh")}</Button>}>
     {service && <Space direction="vertical" size="large" style={{ width: "100%" }}>
@@ -848,7 +894,8 @@ function ServiceDrawer({ service, refreshing, onClose, onRefresh, onCommandCreat
               <Typography.Text code copyable={{ text: generatedKeyFromCommand(commandResult)! }}>{generatedKeyFromCommand(commandResult)}</Typography.Text>
             </Space>}
           />}
-          <ActionResultList command={commandResult} service={service} onRunAction={executeRowAction} />
+          <ActionResultDetail command={commandResult} service={service} onOpenAction={openContextAction} />
+          <ActionResultList command={commandResult} service={service} onOpenAction={openContextAction} />
           <Collapse
             size="small"
             style={{ marginTop: 16 }}
@@ -859,6 +906,7 @@ function ServiceDrawer({ service, refreshing, onClose, onRefresh, onCommandCreat
             }]}
           />
         </Card>}
+        {!commandResult && preparedDetail && <ActionDetailCard detail={preparedDetail} service={service} onOpenAction={openContextAction} />}
       </Spin>
     </Modal>
   </Drawer>;
