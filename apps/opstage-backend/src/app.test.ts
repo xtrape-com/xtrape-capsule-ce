@@ -403,10 +403,12 @@ describe("Phase 2 agent registration and service report", () => {
       cookies: { opstage_session: cookie.value }
     });
     expect(auditRes.statusCode).toBe(200);
-    const events = auditRes.json().data as Array<{ targetId: string; metadata?: { previousActiveCount?: number } }>;
+    const events = auditRes.json().data as Array<{ targetId: string; metadata?: { revokedTokens?: number } }>;
     const rotation = events.find(e => e.targetId === agentId);
     expect(rotation).toBeDefined();
-    expect(rotation?.metadata?.previousActiveCount).toBe(1);
+    // The redactor used to live on key names; this assertion regresses the
+    // bug where a numeric `revokedTokens` was being clobbered to "[REDACTED]".
+    expect(rotation?.metadata?.revokedTokens).toBe(1);
 
     await app.close();
   });

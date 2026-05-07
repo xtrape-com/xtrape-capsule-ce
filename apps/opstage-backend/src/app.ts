@@ -5,7 +5,7 @@ import cookie from "@fastify/cookie";
 import { z } from "zod";
 import { adminLoginRequestSchema, agentHeartbeatRequestSchema, createActionCommandRequestSchema, createRegistrationTokenRequestSchema, createUserRequestSchema, registerAgentRequestSchema, reportCommandResultRequestSchema, resetUserPasswordRequestSchema, serviceReportRequestSchema, updateUserRequestSchema, type ReportedService } from "@xtrape/capsule-contracts-node";
 import { DEFAULT_WORKSPACE, ensureDefaultWorkspace, openDatabase, type Db } from "@xtrape/capsule-db";
-import { createId, hashToken, newToken, redactSecrets, safeJsonStringify } from "@xtrape/capsule-shared";
+import { createId, hashToken, newToken, redactAuditMetadata, redactSecrets, safeJsonStringify } from "@xtrape/capsule-shared";
 import { type AppConfig, loadConfig } from "./config.js";
 import { requireOperator, requireOwner } from "./rbac.js";
 import { createCsrfToken, createSessionId, hashPassword, signSessionId, verifyPassword, verifySignedSessionId } from "./security.js";
@@ -715,7 +715,11 @@ function writeAudit(db: Db, input: {
     input.message ?? null,
     input.ipAddress ?? null,
     input.userAgent ?? null,
-    safeJsonStringify(redactSecrets(input.metadata ?? {})),
+    // Audit metadata is backend-constructed from primitives (counts, IDs,
+    // role names). Use the value-based redactor so legitimate field names
+    // like `tokenCount` are preserved; only string values that literally
+    // embed an opstage_*_ token get masked.
+    safeJsonStringify(redactAuditMetadata(input.metadata ?? {})),
     now()
   );
 }
@@ -1459,10 +1463,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
         action: "agent.token.rotated",
         targetType: "Agent",
         targetId: agentId,
-        // Use a key that doesn't trip redactSecrets's `/token/` match — the
-        // redactor walks audit metadata too, and any key containing "token"
-        // would have its numeric value replaced with [REDACTED].
-        metadata: { previousActiveCount: revokedTokens },
+        metadata: { revokedTokens },
       });
     }
     writeAudit(db, { actorType: "AGENT", actorId: agentId, action: "agent.registered", targetType: "Agent", targetId: agentId });
