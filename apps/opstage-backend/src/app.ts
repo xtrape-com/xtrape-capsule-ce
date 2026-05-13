@@ -1076,19 +1076,49 @@ export async function buildApp(options: BuildAppOptions = {}) {
     }
   });
 
-  app.get("/api/system/health", async () => ({
-    success: true,
-    data: {
-      status: "UP",
-      timestamp: now()
+  app.get("/api/system/health", async () => {
+    // Probe the database with a cheap round-trip so the health endpoint
+    // reflects more than process liveness. Anything < 50ms is healthy;
+    // > 250ms degrades; failure is DOWN.
+    const dbStart = Date.now();
+    let dbStatus: "UP" | "DEGRADED" | "DOWN" = "UP";
+    try {
+      db.prepare("select 1 as ok").get();
+    } catch {
+      dbStatus = "DOWN";
     }
-  }));
+    const dbLatency = Date.now() - dbStart;
+    if (dbStatus === "UP" && dbLatency > 250) dbStatus = "DEGRADED";
+    const overall: "UP" | "DEGRADED" | "DOWN" = dbStatus === "DOWN" ? "DOWN" : dbStatus;
+    return {
+      success: true,
+      data: {
+        status: overall,
+        timestamp: now(),
+        version: config.OPSTAGE_VERSION ?? "0.1.0",
+        edition: "ce" as const,
+        database: {
+          status: dbStatus,
+          kind: "sqlite" as const,
+          latencyMs: dbLatency
+        },
+        uptimeSeconds: Math.floor(process.uptime())
+      }
+    };
+  });
+
+  // Lightweight alias — useful for container healthchecks that don't want to
+  // pull in the full /api/system/health probe. Returns 200 if the event loop
+  // is responsive.
+  app.get("/health", async () => ({ success: true, data: { status: "UP" } }));
 
   app.get("/api/system/version", async () => ({
     success: true,
     data: {
-      version: "0.1.0",
-      edition: "CE"
+      version: config.OPSTAGE_VERSION ?? "0.1.0",
+      edition: "ce" as const,
+      commit: config.OPSTAGE_COMMIT,
+      buildTime: config.OPSTAGE_BUILD_TIME
     }
   }));
 

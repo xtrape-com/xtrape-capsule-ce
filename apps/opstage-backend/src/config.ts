@@ -16,7 +16,12 @@ const envSchema = z.object({
   OPSTAGE_MAINTENANCE_INTERVAL_SECONDS: z.coerce.number().int().min(0).default(60),
   OPSTAGE_BACKUP_DIR: z.string().default("./data/backups"),
   OPSTAGE_COMMAND_RESULT_MAX_BYTES: z.coerce.number().int().positive().default(1_000_000),
-  NODE_ENV: z.string().optional()
+  NODE_ENV: z.string().optional(),
+  // Image / build metadata. Populated at container build time by the
+  // docker-publish workflow via --build-arg; harmless if unset locally.
+  OPSTAGE_VERSION: z.string().optional(),
+  OPSTAGE_COMMIT: z.string().optional(),
+  OPSTAGE_BUILD_TIME: z.string().optional()
 });
 
 export type AppConfig = z.infer<typeof envSchema>;
