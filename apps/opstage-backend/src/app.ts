@@ -851,12 +851,66 @@ interface RuntimeCounters {
   oversizedCommandResultsRejected: number;
 }
 
-function collectMetrics(db: Db, counters: RuntimeCounters) {
+function percentile(sorted: number[], pct: number): number | null {
+  if (sorted.length === 0) return null;
+  if (sorted.length === 1) return sorted[0] ?? null;
+  const rank = Math.min(sorted.length - 1, Math.ceil((pct / 100) * sorted.length) - 1);
+  return sorted[Math.max(0, rank)] ?? null;
+}
+
+function collectMetrics(db: Db, counters: RuntimeCounters, config: AppConfig) {
   const count = (table: string) => (db.prepare(`select count(*) as count from ${table} where workspaceId = ?`).get(DEFAULT_WORKSPACE.id) as { count: number }).count;
   const byStatus = (table: string) => Object.fromEntries((db.prepare(`select status, count(*) as count from ${table} where workspaceId = ? group by status`).all(DEFAULT_WORKSPACE.id) as { status: string; count: number }[]).map(row => [row.status, row.count]));
   const auditActionCount = (action: string) => (db.prepare("select count(*) as count from audit_events where workspaceId = ? and action = ?").get(DEFAULT_WORKSPACE.id, action) as { count: number }).count;
   const commandErrorCount = (errorCode: string) => (db.prepare("select count(*) as count from commands where workspaceId = ? and errorCode = ?").get(DEFAULT_WORKSPACE.id, errorCode) as { count: number }).count;
   const commandTypeStatusCount = (type: string, status: string) => (db.prepare("select count(*) as count from commands where workspaceId = ? and type = ? and status = ?").get(DEFAULT_WORKSPACE.id, type, status) as { count: number }).count;
+
+  // Command duration distribution from the last N completed commands. Bounded
+  // by 1000 rows so this stays a cheap endpoint even on long-running CE
+  // instances with millions of historic commands.
+  const recentTerminal = db.prepare(`
+    select startedAt, completedAt, status
+    from commands
+    where workspaceId = ? and startedAt is not null and completedAt is not null
+    order by completedAt desc
+    limit 1000
+  `).all(DEFAULT_WORKSPACE.id) as { startedAt: string; completedAt: string; status: string }[];
+  const durations = recentTerminal
+    .map(r => Date.parse(r.completedAt) - Date.parse(r.startedAt))
+    .filter(ms => Number.isFinite(ms) && ms >= 0)
+    .sort((a, b) => a - b);
+  const durationSummary = durations.length === 0
+    ? { sampleSize: 0, p50Ms: null, p95Ms: null, maxMs: null, meanMs: null }
+    : {
+        sampleSize: durations.length,
+        p50Ms: percentile(durations, 50),
+        p95Ms: percentile(durations, 95),
+        maxMs: durations[durations.length - 1],
+        meanMs: Math.round(durations.reduce((sum, d) => sum + d, 0) / durations.length),
+      };
+
+  // Stale agents: ONLINE in the row but heartbeat older than the configured
+  // threshold. These should flip on the next maintenance sweep; surfacing
+  // them in metrics makes it visible when the sweeper hasn't run.
+  const offlineThreshold = config.OPSTAGE_AGENT_OFFLINE_THRESHOLD_SECONDS;
+  const staleBefore = new Date(Date.now() - offlineThreshold * 1000).toISOString();
+  const staleOnlineAgents = (db.prepare(
+    "select count(*) as count from agents where workspaceId = ? and status = 'ONLINE' and (lastHeartbeatAt is null or lastHeartbeatAt < ?)"
+  ).get(DEFAULT_WORKSPACE.id, staleBefore) as { count: number }).count;
+
+  // Top 5 distinct errorCodes by frequency, across all FAILED commands. Lets
+  // an operator see at a glance what the recurring failure modes are without
+  // scrolling the commands list.
+  const topErrors = (db.prepare(`
+    select errorCode, count(*) as count
+    from commands
+    where workspaceId = ? and status = 'FAILED' and errorCode is not null
+    group by errorCode
+    order by count desc
+    limit 5
+  `).all(DEFAULT_WORKSPACE.id) as { errorCode: string; count: number }[])
+    .map(row => ({ code: row.errorCode, count: row.count }));
+
   return {
     workspace: DEFAULT_WORKSPACE,
     totals: {
@@ -881,8 +935,11 @@ function collectMetrics(db: Db, counters: RuntimeCounters) {
       actionPrepareRequested: auditActionCount("service.action.prepare_requested"),
       actionPrepareTimeouts: commandErrorCount("ACTION_PREPARE_TIMEOUT"),
       actionPrepareFailures: commandTypeStatusCount("ACTION_PREPARE", "FAILED"),
-      oversizedCommandResultsRejected: counters.oversizedCommandResultsRejected
-    }
+      oversizedCommandResultsRejected: counters.oversizedCommandResultsRejected,
+      staleOnlineAgents,
+    },
+    commandDurations: durationSummary,
+    topCommandErrors: topErrors,
   };
 }
 
@@ -1821,7 +1878,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
 
   app.get("/api/admin/metrics", async (req) => {
     getSessionUser(req, db, config);
-    return { success: true, data: collectMetrics(db, runtimeCounters) };
+    return { success: true, data: collectMetrics(db, runtimeCounters, config) };
   });
 
   app.get("/api/admin/diagnostics/runtime", async (req) => {

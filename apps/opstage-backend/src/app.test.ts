@@ -1036,6 +1036,17 @@ describe("Phase 12 export backup and diagnostics", () => {
     const metrics = await app.inject({ method: "GET", url: "/api/admin/metrics", cookies: { opstage_session: cookie.value } });
     expect(metrics.statusCode).toBe(200);
     expect(metrics.json().data.totals.users).toBe(1);
+    // v0.2 metrics surface: command duration summary (sample 0 on a fresh
+    // workspace), stale-online-agents indicator, and topCommandErrors array.
+    expect(metrics.json().data.commandDurations).toMatchObject({
+      sampleSize: 0,
+      p50Ms: null,
+      p95Ms: null,
+      maxMs: null,
+      meanMs: null,
+    });
+    expect(metrics.json().data.operational.staleOnlineAgents).toBe(0);
+    expect(Array.isArray(metrics.json().data.topCommandErrors)).toBe(true);
 
     const updateSettings = await app.inject({ method: "PATCH", url: "/api/admin/settings/maintenance", cookies: { opstage_session: cookie.value }, headers: { "x-csrf-token": csrfToken }, payload: { agentOfflineThresholdSeconds: 5, auditRetentionDays: 7, maintenanceIntervalSeconds: 0 } });
     expect(updateSettings.statusCode).toBe(200);
