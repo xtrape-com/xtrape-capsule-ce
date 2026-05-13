@@ -570,6 +570,96 @@ describe("Phase 3 command and action loop", () => {
     await app.close();
   });
 
+  it("captures failure reason and duration on the command row when an action fails", async () => {
+    const { app, cookie, csrfToken, agentId, agentToken, serviceId } = await setupRegisteredService();
+    const create = await app.inject({
+      method: "POST",
+      url: `/api/admin/capsule-services/${serviceId}/actions/echo`,
+      cookies: { opstage_session: cookie.value },
+      headers: { "x-csrf-token": csrfToken },
+      payload: { payload: { message: "hi" } },
+    });
+    const commandId = create.json().data.id as string;
+
+    // poll → RUNNING (also produces a non-null startedAt that durationMs needs)
+    await app.inject({
+      method: "GET",
+      url: `/api/agents/${agentId}/commands`,
+      headers: { authorization: `Bearer ${agentToken}` },
+    });
+
+    // Report a failure. error.code + error.message should land on the command row.
+    const result = await app.inject({
+      method: "POST",
+      url: `/api/agents/${agentId}/commands/${commandId}/result`,
+      headers: { authorization: `Bearer ${agentToken}` },
+      payload: {
+        success: false,
+        error: { code: "UPSTREAM_5XX", message: "vendor returned 503 after 3 retries" },
+      },
+    });
+    expect(result.statusCode).toBe(200);
+    expect(result.json().data.success).toBe(false);
+
+    const detail = await app.inject({
+      method: "GET",
+      url: `/api/admin/commands/${commandId}`,
+      cookies: { opstage_session: cookie.value },
+    });
+    expect(detail.statusCode).toBe(200);
+    const body = detail.json().data;
+    expect(body.status).toBe("FAILED");
+    expect(body.errorCode).toBe("UPSTREAM_5XX");
+    expect(body.errorMessage).toBe("vendor returned 503 after 3 retries");
+    expect(typeof body.durationMs).toBe("number");
+    expect(body.durationMs).toBeGreaterThanOrEqual(0);
+
+    // Also surfaces in the list endpoint without an extra join.
+    const list = await app.inject({
+      method: "GET",
+      url: "/api/admin/commands?status=FAILED",
+      cookies: { opstage_session: cookie.value },
+    });
+    expect(list.json().pagination.total).toBe(1);
+    expect(list.json().data[0]).toMatchObject({
+      id: commandId,
+      status: "FAILED",
+      errorCode: "UPSTREAM_5XX",
+      errorMessage: "vendor returned 503 after 3 retries",
+    });
+
+    // Reports without an explicit error.code still produce a fallback ACTION_FAILED
+    // entry, never an empty string.
+    const create2 = await app.inject({
+      method: "POST",
+      url: `/api/admin/capsule-services/${serviceId}/actions/echo`,
+      cookies: { opstage_session: cookie.value },
+      headers: { "x-csrf-token": csrfToken },
+      payload: { payload: { message: "another" } },
+    });
+    const command2Id = create2.json().data.id as string;
+    await app.inject({
+      method: "GET",
+      url: `/api/agents/${agentId}/commands`,
+      headers: { authorization: `Bearer ${agentToken}` },
+    });
+    await app.inject({
+      method: "POST",
+      url: `/api/agents/${agentId}/commands/${command2Id}/result`,
+      headers: { authorization: `Bearer ${agentToken}` },
+      payload: { success: false, message: "no code provided here" },
+    });
+    const detail2 = await app.inject({
+      method: "GET",
+      url: `/api/admin/commands/${command2Id}`,
+      cookies: { opstage_session: cookie.value },
+    });
+    expect(detail2.json().data.errorCode).toBe("ACTION_FAILED");
+    expect(detail2.json().data.errorMessage).toBe("no code provided here");
+
+    await app.close();
+  });
+
   it("respects agent command poll limit", async () => {
     const db = openDatabase({ databaseUrl: ":memory:" });
     const { app, cookie, csrfToken, agentId, agentToken, serviceId } = await setupRegisteredService(db);
@@ -694,8 +784,12 @@ describe("Phase 3 command and action loop", () => {
 
     const prepare = await preparePromise;
     expect(prepare.statusCode).toBe(424);
+    // The endpoint now surfaces the agent-reported error.code on the
+    // command row directly (PREPARE_FAILED here) rather than always
+    // falling back to a generic ACTION_PREPARE_FAILED. The fallback only
+    // applies when the agent reported no error.code at all.
     expect(prepare.json().error).toMatchObject({
-      code: "ACTION_PREPARE_FAILED",
+      code: "PREPARE_FAILED",
       message: "prepare failed",
       details: {
         commandId,

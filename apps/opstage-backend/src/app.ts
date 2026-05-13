@@ -400,6 +400,14 @@ function initialPayloadFromSchema(schema: Record<string, unknown>): Record<strin
 
 function publicCommand(row: CommandRow, options: { redactPayload?: boolean } = {}) {
   const payload = jsonParse(row.payloadJson);
+  // Computed convenience: duration between dispatch (startedAt) and terminal
+  // state (completedAt). Lets the UI render "succeeded in 1.2s" without a
+  // second timestamp parse on the client. null for commands that never
+  // started (cancelled while PENDING) or never finished (still RUNNING).
+  const durationMs =
+    row.startedAt && row.completedAt
+      ? Math.max(0, Date.parse(row.completedAt) - Date.parse(row.startedAt))
+      : null;
   return {
     id: row.id,
     agentId: row.agentId,
@@ -415,7 +423,32 @@ function publicCommand(row: CommandRow, options: { redactPayload?: boolean } = {
     updatedAt: row.updatedAt,
     startedAt: row.startedAt,
     completedAt: row.completedAt,
-    expiresAt: row.expiresAt
+    expiresAt: row.expiresAt,
+    durationMs
+  };
+}
+
+/**
+ * Pull a human-actionable failure reason out of the agent-reported result.
+ * Convention: agents put a stable identifier in `error.code` and a short
+ * sentence in either `error.message` or the top-level `message`. We keep the
+ * code at most 80 chars and the message at most 500 to avoid runaway
+ * payloads landing in the commands row (where it shows up in every list
+ * response).
+ */
+function extractCommandFailureReason(body: {
+  success: boolean;
+  message?: string;
+  error?: Record<string, unknown>;
+}): { code: string | null; message: string | null } {
+  const err = body.error ?? {};
+  const rawCode = typeof err.code === "string" ? err.code : null;
+  const rawMessage =
+    (typeof err.message === "string" ? err.message : null) ??
+    (typeof body.message === "string" ? body.message : null);
+  return {
+    code: rawCode ? rawCode.slice(0, 80) : "ACTION_FAILED",
+    message: rawMessage ? rawMessage.slice(0, 500) : null,
   };
 }
 
@@ -1855,9 +1888,23 @@ export async function buildApp(options: BuildAppOptions = {}) {
     }
     const ts = now();
     const resultId = createId("crs");
+    // On failure, lift the most actionable fields out of the agent-reported
+    // result and into the commands row itself. This lets the list /detail
+    // endpoints and the UI surface "why" without joining command_results
+    // every time. The full body still lands in command_results.errorJson.
+    const errInfo = body.success
+      ? { code: null as string | null, message: null as string | null }
+      : extractCommandFailureReason(body);
     const completed = db.prepare(
-      "update commands set status = ?, completedAt = ?, updatedAt = ? where id = ? and status in ('PENDING', 'RUNNING')"
-    ).run(body.success ? "SUCCEEDED" : "FAILED", ts, ts, command.id).changes;
+      "update commands set status = ?, completedAt = ?, updatedAt = ?, errorCode = ?, errorMessage = ? where id = ? and status in ('PENDING', 'RUNNING')"
+    ).run(
+      body.success ? "SUCCEEDED" : "FAILED",
+      ts,
+      ts,
+      errInfo.code,
+      errInfo.message,
+      command.id,
+    ).changes;
     if (completed === 0) {
       throw Object.assign(new Error("Command is already completed."), { statusCode: 409, code: "COMMAND_ALREADY_COMPLETED" });
     }
