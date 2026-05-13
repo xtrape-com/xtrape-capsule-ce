@@ -320,7 +320,7 @@ function publicAgent(row: AgentRow) {
   };
 }
 
-function publicCapsuleService(row: CapsuleServiceRow) {
+function publicCapsuleService(row: CapsuleServiceRow, effectiveStatus: string = row.status) {
   return {
     id: row.id,
     agentId: row.agentId,
@@ -329,13 +329,39 @@ function publicCapsuleService(row: CapsuleServiceRow) {
     description: row.description,
     version: row.version,
     runtime: row.runtime,
-    status: row.status,
+    status: effectiveStatus,
+    storedStatus: row.status,
     healthStatus: row.healthStatus,
     lastReportedAt: row.lastReportedAt,
     lastHealthAt: row.lastHealthAt,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt
   };
+}
+
+/**
+ * Serialize a list of services with effective-status derived per-row, batching
+ * the agent lookups to avoid an N+1 query pattern on large fleets.
+ */
+function publicCapsuleServicesWithFreshness(
+  db: Db,
+  rows: CapsuleServiceRow[],
+  config: AppConfig,
+): ReturnType<typeof publicCapsuleService>[] {
+  const agentIds = Array.from(new Set(rows.map(r => r.agentId).filter((id): id is string => Boolean(id))));
+  const agentMap = new Map<string, AgentRow>();
+  if (agentIds.length > 0) {
+    const placeholders = agentIds.map(() => "?").join(",");
+    const agents = db.prepare(`select * from agents where id in (${placeholders})`).all(...agentIds) as AgentRow[];
+    for (const a of agents) agentMap.set(a.id, a);
+  }
+  const nowMs = Date.now();
+  return rows.map(r =>
+    publicCapsuleService(
+      r,
+      deriveEffectiveStatus(r, r.agentId ? agentMap.get(r.agentId) : undefined, config.OPSTAGE_AGENT_OFFLINE_THRESHOLD_SECONDS, nowMs),
+    ),
+  );
 }
 
 function publicActionDefinition(row: ActionDefinitionRow) {
@@ -571,6 +597,34 @@ function effectiveServiceStatus(healthStatus: string): string {
   if (healthStatus === "UP") return "HEALTHY";
   if (healthStatus === "DEGRADED" || healthStatus === "DOWN") return "UNHEALTHY";
   return "UNKNOWN";
+}
+
+/**
+ * Compute the operator-facing `effectiveStatus` of a service **at query time**,
+ * folding in the owning agent's state and heartbeat freshness in addition to
+ * the stored health-derived status. This is what consumers should display.
+ *
+ * The maintenance sweep eventually flips stored `status` to STALE / OFFLINE,
+ * but between sweeps (default 60s interval) the stored value is stale; this
+ * helper closes that gap so the UI reflects reality within seconds.
+ *
+ * Returns the stored `row.status` for services whose agent is healthy and
+ * reporting on time — that path is the fast common case.
+ */
+function deriveEffectiveStatus(
+  row: CapsuleServiceRow,
+  agent: AgentRow | undefined,
+  offlineThresholdSeconds: number,
+  nowMs = Date.now(),
+): string {
+  if (!agent) return "OFFLINE";
+  if (agent.status === "REVOKED" || agent.status === "DISABLED") return "OFFLINE";
+  if (agent.status === "OFFLINE") return "STALE";
+  // agent.status === "ONLINE" || "PENDING" — verify the heartbeat is fresh.
+  const lastHbMs = agent.lastHeartbeatAt ? Date.parse(agent.lastHeartbeatAt) : 0;
+  if (!lastHbMs || nowMs - lastHbMs > offlineThresholdSeconds * 1000) return "STALE";
+  // Agent is alive; respect the stored status (HEALTHY / UNHEALTHY / UNKNOWN).
+  return row.status;
 }
 
 function upsertReportedService(db: Db, agent: AgentRow, service: ReportedService): CapsuleServiceRow {
@@ -1381,7 +1435,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     const row = db.prepare("select * from agents where id = ? and workspaceId = ?").get(agentId, DEFAULT_WORKSPACE.id) as AgentRow | undefined;
     if (!row) throw Object.assign(new Error("Agent not found."), { statusCode: 404, code: "AGENT_NOT_FOUND" });
     const services = db.prepare("select * from capsule_services where agentId = ? order by createdAt desc").all(agentId) as CapsuleServiceRow[];
-    return { success: true, data: { ...publicAgent(row), services: services.map(publicCapsuleService) } };
+    return { success: true, data: { ...publicAgent(row), services: publicCapsuleServicesWithFreshness(db, services, config) } };
   });
 
   app.get("/api/admin/capsule-services", async (req) => {
@@ -1397,7 +1451,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     const where = clauses.join(" and ");
     const rows = db.prepare(`select * from capsule_services where ${where} order by createdAt desc limit ? offset ?`).all(...values, pageSize, offset) as CapsuleServiceRow[];
     const total = db.prepare(`select count(*) as count from capsule_services where ${where}`).get(...values) as { count: number };
-    return { success: true, data: rows.map(publicCapsuleService), pagination: { page, pageSize, total: total.count } };
+    return { success: true, data: publicCapsuleServicesWithFreshness(db, rows, config), pagination: { page, pageSize, total: total.count } };
   });
 
   app.get("/api/admin/capsule-services/:serviceId", async (req) => {
@@ -1408,10 +1462,12 @@ export async function buildApp(options: BuildAppOptions = {}) {
     const configs = db.prepare("select * from config_items where serviceId = ? order by configKey asc").all(serviceId);
     const actions = db.prepare("select * from action_definitions where serviceId = ? order by name asc").all(serviceId) as ActionDefinitionRow[];
     const health = db.prepare("select * from health_reports where serviceId = ? order by reportedAt desc limit 1").get(serviceId) as { status: string; message: string | null; detailsJson: string | null; reportedAt: string } | undefined;
+    const ownerAgent = row.agentId ? (db.prepare("select * from agents where id = ?").get(row.agentId) as AgentRow | undefined) : undefined;
+    const effective = deriveEffectiveStatus(row, ownerAgent, config.OPSTAGE_AGENT_OFFLINE_THRESHOLD_SECONDS);
     return {
       success: true,
       data: {
-        ...publicCapsuleService(row),
+        ...publicCapsuleService(row, effective),
         manifest: jsonParse(row.manifestJson),
         health: health ? { ...health, details: jsonParse(health.detailsJson) } : null,
         configs,
@@ -1475,7 +1531,17 @@ export async function buildApp(options: BuildAppOptions = {}) {
     const agent = authenticateAgent(req, db, agentId);
     const body = agentHeartbeatRequestSchema.parse(req.body ?? {});
     const ts = now();
-    db.prepare("update agents set status = 'ONLINE', lastHeartbeatAt = ?, updatedAt = ? where id = ?").run(ts, ts, agent.id);
+    // Always refresh the freshness timestamp — that's the source-of-truth for
+    // "is this agent alive". Only write the `status` column on the actual
+    // OFFLINE → ONLINE transition; otherwise we'd issue a no-op UPDATE on
+    // every heartbeat (one per agent every 30s).
+    if (agent.status !== "ONLINE") {
+      db.prepare(
+        "update agents set status = 'ONLINE', lastHeartbeatAt = ?, updatedAt = ? where id = ? and status not in ('REVOKED', 'DISABLED')"
+      ).run(ts, ts, agent.id);
+    } else {
+      db.prepare("update agents set lastHeartbeatAt = ?, updatedAt = ? where id = ?").run(ts, ts, agent.id);
+    }
     const lastAuditMs = lastHeartbeatAuditAt.get(agent.id) ?? 0;
     if (Date.now() - lastAuditMs >= HEARTBEAT_AUDIT_INTERVAL_MS) {
       writeAudit(db, { actorType: "AGENT", actorId: agent.id, action: "agent.heartbeat.received", targetType: "Agent", targetId: agent.id });
@@ -1496,7 +1562,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     const agent = authenticateAgent(req, db, agentId);
     const body = serviceReportRequestSchema.parse(req.body);
     const upserted = body.services.map(service => upsertReportedService(db, agent, service));
-    const services = upserted.map(publicCapsuleService);
+    const services = publicCapsuleServicesWithFreshness(db, upserted, config);
     for (const svc of upserted) {
       writeAudit(db, { actorType: "AGENT", actorId: agentId, action: "service.reported", targetType: "CapsuleService", targetId: svc.id });
     }
