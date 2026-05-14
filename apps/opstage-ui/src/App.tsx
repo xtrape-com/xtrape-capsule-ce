@@ -1,117 +1,38 @@
 import { App as AntApp, Alert, Badge, Button, Card, Collapse, Descriptions, Drawer, Form, Input, InputNumber, Layout, Menu, Modal, Popconfirm, Select, Space, Spin, Statistic, Switch, Table, Tag, Tooltip, Typography, message } from "antd";
 import type { ColumnsType } from "antd/es/table";
-import { useQuery } from "@tanstack/react-query";
 import React from "react";
 import { Link, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
-import { ApiError, apiDownload, apiFetch, apiList, login, logout, me, type SessionData } from "./api.js";
+import { ApiError, apiDownload, apiFetch, apiList, logout, me, type SessionData } from "./api.js";
 import { JsonBlock, StatusTag } from "./components.js";
-import { useI18n, type Language } from "./i18n.js";
-
-interface Agent { id: string; code: string; name?: string | null; mode: string; runtime?: string | null; status: string; lastHeartbeatAt?: string | null; createdAt: string; updatedAt: string; services?: Service[] }
-interface Service { id: string; agentId: string; code: string; name: string; description?: string | null; version?: string | null; runtime?: string | null; status: string; healthStatus: string; lastReportedAt?: string | null; lastHealthAt?: string | null; createdAt: string; updatedAt: string; actions?: Action[]; configs?: ConfigItem[]; health?: Record<string, unknown> | null; manifest?: Record<string, unknown> }
-interface Action { id: string; serviceId: string; name: string; label: string; description?: string | null; dangerLevel: string; requiresConfirmation: boolean; category?: string; order?: number; inputSchema?: Record<string, unknown>; timeoutSeconds?: number | null; enabled: boolean }
-interface ActionPrepare { action: Action; initialPayload: Record<string, unknown>; currentState?: Record<string, unknown> }
-interface ConfigItem { id: string; configKey: string; label?: string | null; type: string; source?: string | null; editable: number; sensitive: number; valuePreview?: string | null; defaultValue?: string | null; secretRef?: string | null }
-interface Command { id: string; agentId: string; serviceId: string; type: string; actionName: string; status: string; payload: Record<string, unknown>; errorCode?: string | null; errorMessage?: string | null; createdAt: string; updatedAt: string; startedAt?: string | null; completedAt?: string | null; durationMs?: number | null; result?: Record<string, unknown> | null }
-interface ResultListColumn { key: string; label?: string; format?: "text" | "status" | "datetime" | "boolean" | "code" | "duration" | "relativeTime" | "bytes"; copyable?: boolean; ellipsis?: boolean; width?: number | string }
-interface ResultListRowAction { label: string; action: string; payload?: Record<string, unknown>; danger?: boolean; confirm?: boolean }
-interface ResultListMeta { title?: string; data?: Record<string, unknown>[]; columns?: ResultListColumn[]; rowActions?: ResultListRowAction[]; pageActions?: ResultListRowAction[]; emptyText?: string; pageSize?: number }
-interface ResultDetailField { key: string; label?: string; format?: ResultListColumn["format"]; copyable?: boolean }
-interface ResultDetailMeta { title?: string; data?: Record<string, unknown>; fields?: ResultDetailField[]; actions?: ResultListRowAction[] }
-interface AccountStatus { id?: string; label?: string; emailMasked?: string; enabled?: boolean; healthy?: boolean; operationStatus?: string; operationName?: string; operationMessage?: string; cooldownRemainingMs?: number; consecutiveFailures?: number; loginVerifiedAt?: number; lastError?: string }
-interface User { id: string; username: string; displayName?: string | null; role: string; status: string; lastLoginAt?: string | null; createdAt: string; updatedAt: string }
-interface AuditEvent { id: string; actorType: string; actorId?: string | null; action: string; targetType?: string | null; targetId?: string | null; result: string; message?: string | null; metadata: Record<string, unknown>; createdAt: string }
-interface RegistrationToken { id: string; name: string; status: string; agentId?: string | null; expiresAt?: string | null; usedAt?: string | null; revokedAt?: string | null; createdAt: string; token?: string; rawToken?: string }
-interface MaintenanceSettings { agentOfflineThresholdSeconds: number; auditRetentionDays: number; maintenanceIntervalSeconds: number }
-interface Metrics { totals: Record<string, number>; byStatus: Record<string, Record<string, number>>; operational?: Record<string, number> }
-interface DiagnosticRow { key: string; value: string | number; category: string }
-interface MaintenanceResult { expiredRegistrationTokens: number; expiredCommands: number; offlineAgents: number; offlineServices: number; deletedAuditEvents: number; ranAt: string }
-interface DashboardSummary { workspace: { id: string; code: string; name: string }; agentCounts: Record<string, number>; serviceCounts: Record<string, number>; commandCounts: Record<string, number>; auditEventCount: number; recentCommands: Command[]; recentAuditEvents: AuditEvent[] }
-interface PageState { page: number; pageSize: number }
-
-const defaultPage: PageState = { page: 1, pageSize: 20 };
-
-function queryString(params: Record<string, string | number | undefined | null>) {
-  const search = new URLSearchParams();
-  for (const [key, value] of Object.entries(params)) {
-    if (value !== undefined && value !== null && value !== "") search.set(key, String(value));
-  }
-  const text = search.toString();
-  return text ? `?${text}` : "";
-}
-
-function searchFilters<T extends Record<string, string | undefined>>(search: string, keys: Array<keyof T>, defaults: T): T {
-  const params = new URLSearchParams(search);
-  const values: Record<string, string | undefined> = { ...defaults };
-  for (const key of keys) values[String(key)] = params.get(String(key)) || undefined;
-  return values as T;
-}
-
-function sameFilters(left: Record<string, unknown>, right: Record<string, unknown>) {
-  return JSON.stringify(left) === JSON.stringify(right);
-}
-
-
-function useQueryData<T>(loader: () => Promise<T>, deps: React.DependencyList = [], refreshMs?: number) {
-  const queryId = React.useId();
-  const query = useQuery({
-    queryKey: [queryId, ...deps],
-    queryFn: loader,
-    refetchInterval: refreshMs,
-    staleTime: refreshMs ? Math.min(refreshMs, 30_000) : 30_000
-  });
-  return {
-    data: query.data ?? null,
-    loading: query.isLoading || query.isFetching,
-    error: query.error instanceof Error ? query.error.message : query.error ? String(query.error) : null,
-    reload: async () => { await query.refetch(); }
-  };
-}
-
-
-async function downloadBlob(path: string, filename: string, options?: RequestInit) {
-  const blob = await apiDownload(path, options);
-  const url = window.URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  link.click();
-  window.URL.revokeObjectURL(url);
-}
-
-function LanguageSwitcher() {
-  const { language, setLanguage, t } = useI18n();
-  return <Select<Language>
-    aria-label={t("language.label")}
-    value={language}
-    onChange={setLanguage}
-    style={{ width: 132 }}
-    options={[
-      { value: "zh-CN", label: t("language.zhCN") },
-      { value: "en-US", label: t("language.enUS") }
-    ]}
-  />;
-}
-
-function LoginPage({ onLogin }: { onLogin: (session: SessionData) => void }) {
-  const { t } = useI18n();
-  const navigate = useNavigate();
-  const [submitting, setSubmitting] = React.useState(false);
-  return <Layout style={{ minHeight: "100vh", display: "grid", placeItems: "center" }}>
-    <Card title={t("login.title")} style={{ width: 420 }} extra={<LanguageSwitcher />}>
-      <Form layout="vertical" initialValues={{ username: "admin" }} onFinish={async (values) => {
-        setSubmitting(true);
-        try { const session = await login(values.username, values.password); onLogin(session); message.success(t("login.success")); navigate("/"); }
-        catch (err) { message.error(err instanceof Error ? err.message : t("login.failed")); }
-        finally { setSubmitting(false); }
-      }}>
-        <Form.Item name="username" label={t("login.username")} rules={[{ required: true }]}><Input autoFocus /></Form.Item>
-        <Form.Item name="password" label={t("login.password")} rules={[{ required: true }]}><Input.Password /></Form.Item>
-        <Button type="primary" htmlType="submit" loading={submitting} block>{t("action.login")}</Button>
-      </Form>
-    </Card>
-  </Layout>;
-}
+import { useI18n } from "./i18n.js";
+import { LanguageSwitcher } from "./pages/LanguageSwitcher.js";
+import { LoginPage } from "./pages/LoginPage.js";
+import { DashboardPage } from "./pages/DashboardPage.js";
+import { queryString, searchFilters, sameFilters, useQueryData, downloadBlob } from "./lib/list-helpers.js";
+import type {
+  AccountStatus,
+  Action,
+  ActionPrepare,
+  Agent,
+  AuditEvent,
+  Command,
+  ConfigItem,
+  DashboardSummary,
+  DiagnosticRow,
+  MaintenanceResult,
+  MaintenanceSettings,
+  Metrics,
+  PageState,
+  RegistrationToken,
+  ResultDetailField,
+  ResultDetailMeta,
+  ResultListColumn,
+  ResultListMeta,
+  ResultListRowAction,
+  Service,
+  User,
+} from "./lib/types.js";
+import { defaultPage } from "./lib/types.js";
 
 function Shell({ session, onLogout }: { session: SessionData; onLogout: () => void }) {
   const { t } = useI18n();
@@ -133,7 +54,7 @@ function Shell({ session, onLogout }: { session: SessionData; onLogout: () => vo
         <Space><LanguageSwitcher /><Button onClick={async () => { await logout(); onLogout(); }}>{t("action.logout")}</Button></Space>
       </Layout.Header>
       <Layout.Content style={{ padding: 24 }}><Routes>
-        <Route path="/" element={<Dashboard />} />
+        <Route path="/" element={<DashboardPage />} />
         <Route path="/users" element={<Users />} />
         <Route path="/registration-tokens" element={<RegistrationTokens />} />
         <Route path="/agents" element={<Agents />} />
@@ -145,28 +66,6 @@ function Shell({ session, onLogout }: { session: SessionData; onLogout: () => vo
     </Layout>
   </Layout>;
 }
-
-function Dashboard() {
-  const { t } = useI18n();
-  const { data, loading, reload } = useQueryData<DashboardSummary>(() => apiFetch("/api/admin/dashboard/summary"), [], 5000);
-  return <Space direction="vertical" size="large" style={{ width: "100%" }}>
-    <Space style={{ justifyContent: "space-between", width: "100%" }}><Typography.Title>{t("dashboard.title")}</Typography.Title><Button onClick={reload}>{t("action.refresh")}</Button></Space>
-    <Space wrap>
-      <Card><Statistic title={t("dashboard.workspace")} value={data?.workspace.name ?? "-"} /></Card>
-      <Card><Statistic title={t("dashboard.onlineAgents")} value={data?.agentCounts.ONLINE ?? 0} loading={loading} /></Card>
-      <Card><Statistic title={t("dashboard.healthyServices")} value={data?.serviceCounts.HEALTHY ?? 0} loading={loading} /></Card>
-      <Card><Statistic title={t("dashboard.runningCommands")} value={data?.commandCounts.RUNNING ?? 0} loading={loading} /></Card>
-      <Card><Statistic title={t("dashboard.auditEvents")} value={data?.auditEventCount ?? 0} loading={loading} /></Card>
-    </Space>
-    <Card title={t("dashboard.recentCommands")}><Table rowKey="id" loading={loading} dataSource={data?.recentCommands ?? []} pagination={false} columns={[
-      { title: t("common.time"), dataIndex: "createdAt" }, { title: "Action", dataIndex: "actionName" }, { title: t("common.status"), dataIndex: "status", render: (v) => <StatusTag value={String(v)} /> }
-    ]} /></Card>
-    <Card title={t("dashboard.recentAuditEvents")}><Table rowKey="id" loading={loading} dataSource={data?.recentAuditEvents ?? []} pagination={false} columns={[
-      { title: t("common.time"), dataIndex: "createdAt" }, { title: t("common.actor"), dataIndex: "actorType" }, { title: "Action", dataIndex: "action" }, { title: t("common.result"), dataIndex: "result", render: (v) => <StatusTag value={String(v)} /> }
-    ]} /></Card>
-  </Space>;
-}
-
 
 function Users() {
   const { t } = useI18n();
