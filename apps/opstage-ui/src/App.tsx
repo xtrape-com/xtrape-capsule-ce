@@ -12,7 +12,7 @@ interface Service { id: string; agentId: string; code: string; name: string; des
 interface Action { id: string; serviceId: string; name: string; label: string; description?: string | null; dangerLevel: string; requiresConfirmation: boolean; category?: string; order?: number; inputSchema?: Record<string, unknown>; timeoutSeconds?: number | null; enabled: boolean }
 interface ActionPrepare { action: Action; initialPayload: Record<string, unknown>; currentState?: Record<string, unknown> }
 interface ConfigItem { id: string; configKey: string; label?: string | null; type: string; source?: string | null; editable: number; sensitive: number; valuePreview?: string | null; defaultValue?: string | null; secretRef?: string | null }
-interface Command { id: string; agentId: string; serviceId: string; type: string; actionName: string; status: string; payload: Record<string, unknown>; errorCode?: string | null; errorMessage?: string | null; createdAt: string; updatedAt: string; startedAt?: string | null; completedAt?: string | null; result?: Record<string, unknown> | null }
+interface Command { id: string; agentId: string; serviceId: string; type: string; actionName: string; status: string; payload: Record<string, unknown>; errorCode?: string | null; errorMessage?: string | null; createdAt: string; updatedAt: string; startedAt?: string | null; completedAt?: string | null; durationMs?: number | null; result?: Record<string, unknown> | null }
 interface ResultListColumn { key: string; label?: string; format?: "text" | "status" | "datetime" | "boolean" | "code" | "duration" | "relativeTime" | "bytes"; copyable?: boolean; ellipsis?: boolean; width?: number | string }
 interface ResultListRowAction { label: string; action: string; payload?: Record<string, unknown>; danger?: boolean; confirm?: boolean }
 interface ResultListMeta { title?: string; data?: Record<string, unknown>[]; columns?: ResultListColumn[]; rowActions?: ResultListRowAction[]; pageActions?: ResultListRowAction[]; emptyText?: string; pageSize?: number }
@@ -991,6 +991,8 @@ function Commands() {
       { title: t("command.agentId"), dataIndex: "agentId", render: (v) => <Typography.Text code copyable>{String(v)}</Typography.Text> },
       { title: t("command.serviceId"), dataIndex: "serviceId", render: (v) => <Typography.Text code copyable>{String(v)}</Typography.Text> },
       { title: t("common.createdAt"), dataIndex: "createdAt" }, { title: t("command.completedAt"), dataIndex: "completedAt" },
+      { title: t("command.duration"), dataIndex: "durationMs", render: (v) => typeof v === "number" ? formatDurationMs(v) : "-" },
+      { title: t("command.errorCode"), dataIndex: "errorCode", render: (v) => v ? <Typography.Text type="danger" code>{String(v)}</Typography.Text> : "-" },
       { title: t("common.operation"), render: (_, row) => <Space>{["PENDING", "RUNNING"].includes(row.status) ? <Popconfirm title={t("confirm.cancelCommand")} onConfirm={async (event) => { event?.stopPropagation(); await apiFetch(`/api/admin/commands/${row.id}/cancel`, { method: "POST" }); message.success(t("command.cancelled")); void reload(); }}><Button danger size="small" onClick={(event) => event.stopPropagation()}>{t("action.cancel")}</Button></Popconfirm> : null}{["FAILED", "EXPIRED", "CANCELLED"].includes(row.status) ? <Popconfirm title={t("confirm.retryCommand")} onConfirm={async (event) => { event?.stopPropagation(); await apiFetch(`/api/admin/commands/${row.id}/retry`, { method: "POST" }); message.success(t("command.retried")); void reload(); }}><Button size="small" onClick={(event) => event.stopPropagation()}>{t("command.retry")}</Button></Popconfirm> : null}</Space> }
     ] as ColumnsType<Command>} />
     <Drawer open={!!selected} onClose={() => setSelected(null)} title={selected?.id} width={860} extra={<Button disabled={!selected} onClick={() => selected && void openCommand(selected.id)}>{t("action.refresh")}</Button>}>
@@ -1004,7 +1006,8 @@ function Commands() {
         { key: "errorMessage", label: t("command.errorMessage"), children: selected.errorMessage ?? "-" },
         { key: "createdAt", label: t("command.createdAt"), children: selected.createdAt },
         { key: "startedAt", label: t("command.startedAt"), children: selected.startedAt ?? "-" },
-        { key: "completedAt", label: t("command.completedAt"), children: selected.completedAt ?? "-" }
+        { key: "completedAt", label: t("command.completedAt"), children: selected.completedAt ?? "-" },
+        { key: "duration", label: t("command.duration"), children: typeof selected.durationMs === "number" ? formatDurationMs(selected.durationMs) : "-" }
       ] : []} />
       <Collapse style={{ marginTop: 24 }} items={[
         { key: "payload", label: "Payload", children: <JsonBlock value={selected?.payload} /> },
