@@ -77,8 +77,13 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
+          # arm64 build via QEMU emulation crashes on pnpm 9.x with
+          # "qemu: uncaught target signal 4 (Illegal instruction)".
+          # Ship amd64-only for v0.2; re-introduce arm64 when we move
+          # to a native arm64 runner or a pnpm version QEMU can emulate
+          # cleanly. Tracked as a v0.3 task.
           file: ./deploy/docker/Dockerfile
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
