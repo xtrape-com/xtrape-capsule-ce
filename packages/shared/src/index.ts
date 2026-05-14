@@ -1,6 +1,5 @@
 import { randomBytes } from "node:crypto";
 
-export * from "./ids.js";
 export * from "./tokens.js";
 
 export type CompactIdPrefix = "usr" | "wks" | "agt" | "tok" | "svc" | "hlr" | "cfg" | "act" | "cmd" | "crs" | "aud" | "set";

@@ -11,6 +11,16 @@ import { requireOperator, requireOwner } from "./rbac.js";
 import { createCsrfToken, createSessionId, hashPassword, signSessionId, verifyPassword, verifySignedSessionId } from "./security.js";
 import { resolveStaticFile, staticContentType } from "./static-ui.js";
 
+/**
+ * Local-development fallback for `OPSTAGE_VERSION` when the process was not
+ * built with a version baked in (e.g. `pnpm dev`). Docker images and tagged
+ * releases always inject `OPSTAGE_VERSION` from the build pipeline, so this
+ * fallback only surfaces in dev / source runs. We intentionally suffix `-dev`
+ * so the value is never mistaken for an actual release on a deployed box.
+ */
+const BACKEND_FALLBACK_VERSION = "0.2.0-dev";
+const BACKEND_EDITION: "ce" = "ce";
+
 export interface BuildAppOptions {
   logger?: boolean;
   config?: Partial<AppConfig>;
@@ -43,7 +53,7 @@ interface RegistrationTokenRow {
   updatedAt: string;
 }
 
-interface AgentRow {
+export interface AgentRow {
   id: string;
   workspaceId: string;
   code: string;
@@ -58,7 +68,7 @@ interface AgentRow {
   updatedAt: string;
 }
 
-interface CapsuleServiceRow {
+export interface CapsuleServiceRow {
   id: string;
   workspaceId: string;
   agentId: string;
@@ -320,7 +330,7 @@ function publicAgent(row: AgentRow) {
   };
 }
 
-function publicCapsuleService(row: CapsuleServiceRow) {
+function publicCapsuleService(row: CapsuleServiceRow, effectiveStatus: string = row.status) {
   return {
     id: row.id,
     agentId: row.agentId,
@@ -329,13 +339,39 @@ function publicCapsuleService(row: CapsuleServiceRow) {
     description: row.description,
     version: row.version,
     runtime: row.runtime,
-    status: row.status,
+    status: effectiveStatus,
+    storedStatus: row.status,
     healthStatus: row.healthStatus,
     lastReportedAt: row.lastReportedAt,
     lastHealthAt: row.lastHealthAt,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt
   };
+}
+
+/**
+ * Serialize a list of services with effective-status derived per-row, batching
+ * the agent lookups to avoid an N+1 query pattern on large fleets.
+ */
+function publicCapsuleServicesWithFreshness(
+  db: Db,
+  rows: CapsuleServiceRow[],
+  config: AppConfig,
+): ReturnType<typeof publicCapsuleService>[] {
+  const agentIds = Array.from(new Set(rows.map(r => r.agentId).filter((id): id is string => Boolean(id))));
+  const agentMap = new Map<string, AgentRow>();
+  if (agentIds.length > 0) {
+    const placeholders = agentIds.map(() => "?").join(",");
+    const agents = db.prepare(`select * from agents where id in (${placeholders})`).all(...agentIds) as AgentRow[];
+    for (const a of agents) agentMap.set(a.id, a);
+  }
+  const nowMs = Date.now();
+  return rows.map(r =>
+    publicCapsuleService(
+      r,
+      deriveEffectiveStatus(r, r.agentId ? agentMap.get(r.agentId) : undefined, config.OPSTAGE_AGENT_OFFLINE_THRESHOLD_SECONDS, nowMs),
+    ),
+  );
 }
 
 function publicActionDefinition(row: ActionDefinitionRow) {
@@ -374,6 +410,14 @@ function initialPayloadFromSchema(schema: Record<string, unknown>): Record<strin
 
 function publicCommand(row: CommandRow, options: { redactPayload?: boolean } = {}) {
   const payload = jsonParse(row.payloadJson);
+  // Computed convenience: duration between dispatch (startedAt) and terminal
+  // state (completedAt). Lets the UI render "succeeded in 1.2s" without a
+  // second timestamp parse on the client. null for commands that never
+  // started (cancelled while PENDING) or never finished (still RUNNING).
+  const durationMs =
+    row.startedAt && row.completedAt
+      ? Math.max(0, Date.parse(row.completedAt) - Date.parse(row.startedAt))
+      : null;
   return {
     id: row.id,
     agentId: row.agentId,
@@ -389,7 +433,32 @@ function publicCommand(row: CommandRow, options: { redactPayload?: boolean } = {
     updatedAt: row.updatedAt,
     startedAt: row.startedAt,
     completedAt: row.completedAt,
-    expiresAt: row.expiresAt
+    expiresAt: row.expiresAt,
+    durationMs
+  };
+}
+
+/**
+ * Pull a human-actionable failure reason out of the agent-reported result.
+ * Convention: agents put a stable identifier in `error.code` and a short
+ * sentence in either `error.message` or the top-level `message`. We keep the
+ * code at most 80 chars and the message at most 500 to avoid runaway
+ * payloads landing in the commands row (where it shows up in every list
+ * response).
+ */
+function extractCommandFailureReason(body: {
+  success: boolean;
+  message?: string;
+  error?: Record<string, unknown>;
+}): { code: string | null; message: string | null } {
+  const err = body.error ?? {};
+  const rawCode = typeof err.code === "string" ? err.code : null;
+  const rawMessage =
+    (typeof err.message === "string" ? err.message : null) ??
+    (typeof body.message === "string" ? body.message : null);
+  return {
+    code: rawCode ? rawCode.slice(0, 80) : "ACTION_FAILED",
+    message: rawMessage ? rawMessage.slice(0, 500) : null,
   };
 }
 
@@ -571,6 +640,38 @@ function effectiveServiceStatus(healthStatus: string): string {
   if (healthStatus === "UP") return "HEALTHY";
   if (healthStatus === "DEGRADED" || healthStatus === "DOWN") return "UNHEALTHY";
   return "UNKNOWN";
+}
+
+/**
+ * Compute the operator-facing `effectiveStatus` of a service **at query time**,
+ * folding in the owning agent's state and heartbeat freshness in addition to
+ * the stored health-derived status. This is what consumers should display.
+ *
+ * The maintenance sweep eventually flips stored `status` to STALE / OFFLINE,
+ * but between sweeps (default 60s interval) the stored value is stale; this
+ * helper closes that gap so the UI reflects reality within seconds.
+ *
+ * Returns the stored `row.status` for services whose agent is healthy and
+ * reporting on time — that path is the fast common case.
+ */
+export function deriveEffectiveStatus(
+  row: CapsuleServiceRow,
+  agent: AgentRow | undefined,
+  offlineThresholdSeconds: number,
+  nowMs = Date.now(),
+): string {
+  // Strong non-operational states: agent is known to be unreachable.
+  // (Missing row, revoked, disabled, or already stored as OFFLINE.)
+  if (!agent) return "OFFLINE";
+  if (agent.status === "REVOKED" || agent.status === "DISABLED") return "OFFLINE";
+  if (agent.status === "OFFLINE") return "OFFLINE";
+  // Agent row is ONLINE / PENDING — bridge the gap between heartbeats and the
+  // maintenance sweep: report STALE when the heartbeat is past freshness, even
+  // if the stored agent row hasn't been flipped to OFFLINE yet.
+  const lastHbMs = agent.lastHeartbeatAt ? Date.parse(agent.lastHeartbeatAt) : 0;
+  if (!lastHbMs || nowMs - lastHbMs > offlineThresholdSeconds * 1000) return "STALE";
+  // Agent is alive and fresh; respect the stored status (HEALTHY / UNHEALTHY / UNKNOWN).
+  return row.status;
 }
 
 function upsertReportedService(db: Db, agent: AgentRow, service: ReportedService): CapsuleServiceRow {
@@ -764,12 +865,66 @@ interface RuntimeCounters {
   oversizedCommandResultsRejected: number;
 }
 
-function collectMetrics(db: Db, counters: RuntimeCounters) {
+function percentile(sorted: number[], pct: number): number | null {
+  if (sorted.length === 0) return null;
+  if (sorted.length === 1) return sorted[0] ?? null;
+  const rank = Math.min(sorted.length - 1, Math.ceil((pct / 100) * sorted.length) - 1);
+  return sorted[Math.max(0, rank)] ?? null;
+}
+
+function collectMetrics(db: Db, counters: RuntimeCounters, config: AppConfig) {
   const count = (table: string) => (db.prepare(`select count(*) as count from ${table} where workspaceId = ?`).get(DEFAULT_WORKSPACE.id) as { count: number }).count;
   const byStatus = (table: string) => Object.fromEntries((db.prepare(`select status, count(*) as count from ${table} where workspaceId = ? group by status`).all(DEFAULT_WORKSPACE.id) as { status: string; count: number }[]).map(row => [row.status, row.count]));
   const auditActionCount = (action: string) => (db.prepare("select count(*) as count from audit_events where workspaceId = ? and action = ?").get(DEFAULT_WORKSPACE.id, action) as { count: number }).count;
   const commandErrorCount = (errorCode: string) => (db.prepare("select count(*) as count from commands where workspaceId = ? and errorCode = ?").get(DEFAULT_WORKSPACE.id, errorCode) as { count: number }).count;
   const commandTypeStatusCount = (type: string, status: string) => (db.prepare("select count(*) as count from commands where workspaceId = ? and type = ? and status = ?").get(DEFAULT_WORKSPACE.id, type, status) as { count: number }).count;
+
+  // Command duration distribution from the last N completed commands. Bounded
+  // by 1000 rows so this stays a cheap endpoint even on long-running CE
+  // instances with millions of historic commands.
+  const recentTerminal = db.prepare(`
+    select startedAt, completedAt, status
+    from commands
+    where workspaceId = ? and startedAt is not null and completedAt is not null
+    order by completedAt desc
+    limit 1000
+  `).all(DEFAULT_WORKSPACE.id) as { startedAt: string; completedAt: string; status: string }[];
+  const durations = recentTerminal
+    .map(r => Date.parse(r.completedAt) - Date.parse(r.startedAt))
+    .filter(ms => Number.isFinite(ms) && ms >= 0)
+    .sort((a, b) => a - b);
+  const durationSummary = durations.length === 0
+    ? { sampleSize: 0, p50Ms: null, p95Ms: null, maxMs: null, meanMs: null }
+    : {
+        sampleSize: durations.length,
+        p50Ms: percentile(durations, 50),
+        p95Ms: percentile(durations, 95),
+        maxMs: durations[durations.length - 1],
+        meanMs: Math.round(durations.reduce((sum, d) => sum + d, 0) / durations.length),
+      };
+
+  // Stale agents: ONLINE in the row but heartbeat older than the configured
+  // threshold. These should flip on the next maintenance sweep; surfacing
+  // them in metrics makes it visible when the sweeper hasn't run.
+  const offlineThreshold = config.OPSTAGE_AGENT_OFFLINE_THRESHOLD_SECONDS;
+  const staleBefore = new Date(Date.now() - offlineThreshold * 1000).toISOString();
+  const staleOnlineAgents = (db.prepare(
+    "select count(*) as count from agents where workspaceId = ? and status = 'ONLINE' and (lastHeartbeatAt is null or lastHeartbeatAt < ?)"
+  ).get(DEFAULT_WORKSPACE.id, staleBefore) as { count: number }).count;
+
+  // Top 5 distinct errorCodes by frequency, across all FAILED commands. Lets
+  // an operator see at a glance what the recurring failure modes are without
+  // scrolling the commands list.
+  const topErrors = (db.prepare(`
+    select errorCode, count(*) as count
+    from commands
+    where workspaceId = ? and status = 'FAILED' and errorCode is not null
+    group by errorCode
+    order by count desc
+    limit 5
+  `).all(DEFAULT_WORKSPACE.id) as { errorCode: string; count: number }[])
+    .map(row => ({ code: row.errorCode, count: row.count }));
+
   return {
     workspace: DEFAULT_WORKSPACE,
     totals: {
@@ -794,15 +949,18 @@ function collectMetrics(db: Db, counters: RuntimeCounters) {
       actionPrepareRequested: auditActionCount("service.action.prepare_requested"),
       actionPrepareTimeouts: commandErrorCount("ACTION_PREPARE_TIMEOUT"),
       actionPrepareFailures: commandTypeStatusCount("ACTION_PREPARE", "FAILED"),
-      oversizedCommandResultsRejected: counters.oversizedCommandResultsRejected
-    }
+      oversizedCommandResultsRejected: counters.oversizedCommandResultsRejected,
+      staleOnlineAgents,
+    },
+    commandDurations: durationSummary,
+    topCommandErrors: topErrors,
   };
 }
 
 function runtimeDiagnostics(db: Db, config: AppConfig) {
   const memory = process.memoryUsage();
   return {
-    version: "0.1.0",
+    version: config.OPSTAGE_VERSION ?? BACKEND_FALLBACK_VERSION,
     edition: "CE",
     node: process.version,
     platform: process.platform,
@@ -1022,19 +1180,49 @@ export async function buildApp(options: BuildAppOptions = {}) {
     }
   });
 
-  app.get("/api/system/health", async () => ({
-    success: true,
-    data: {
-      status: "UP",
-      timestamp: now()
+  app.get("/api/system/health", async () => {
+    // Probe the database with a cheap round-trip so the health endpoint
+    // reflects more than process liveness. Anything < 50ms is healthy;
+    // > 250ms degrades; failure is DOWN.
+    const dbStart = Date.now();
+    let dbStatus: "UP" | "DEGRADED" | "DOWN" = "UP";
+    try {
+      db.prepare("select 1 as ok").get();
+    } catch {
+      dbStatus = "DOWN";
     }
-  }));
+    const dbLatency = Date.now() - dbStart;
+    if (dbStatus === "UP" && dbLatency > 250) dbStatus = "DEGRADED";
+    const overall: "UP" | "DEGRADED" | "DOWN" = dbStatus === "DOWN" ? "DOWN" : dbStatus;
+    return {
+      success: true,
+      data: {
+        status: overall,
+        timestamp: now(),
+        version: config.OPSTAGE_VERSION ?? BACKEND_FALLBACK_VERSION,
+        edition: BACKEND_EDITION,
+        database: {
+          status: dbStatus,
+          kind: "sqlite" as const,
+          latencyMs: dbLatency
+        },
+        uptimeSeconds: Math.floor(process.uptime())
+      }
+    };
+  });
+
+  // Lightweight alias — useful for container healthchecks that don't want to
+  // pull in the full /api/system/health probe. Returns 200 if the event loop
+  // is responsive.
+  app.get("/health", async () => ({ success: true, data: { status: "UP" } }));
 
   app.get("/api/system/version", async () => ({
     success: true,
     data: {
-      version: "0.1.0",
-      edition: "CE"
+      version: config.OPSTAGE_VERSION ?? BACKEND_FALLBACK_VERSION,
+      edition: BACKEND_EDITION,
+      commit: config.OPSTAGE_COMMIT,
+      buildTime: config.OPSTAGE_BUILD_TIME
     }
   }));
 
@@ -1381,7 +1569,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     const row = db.prepare("select * from agents where id = ? and workspaceId = ?").get(agentId, DEFAULT_WORKSPACE.id) as AgentRow | undefined;
     if (!row) throw Object.assign(new Error("Agent not found."), { statusCode: 404, code: "AGENT_NOT_FOUND" });
     const services = db.prepare("select * from capsule_services where agentId = ? order by createdAt desc").all(agentId) as CapsuleServiceRow[];
-    return { success: true, data: { ...publicAgent(row), services: services.map(publicCapsuleService) } };
+    return { success: true, data: { ...publicAgent(row), services: publicCapsuleServicesWithFreshness(db, services, config) } };
   });
 
   app.get("/api/admin/capsule-services", async (req) => {
@@ -1397,7 +1585,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     const where = clauses.join(" and ");
     const rows = db.prepare(`select * from capsule_services where ${where} order by createdAt desc limit ? offset ?`).all(...values, pageSize, offset) as CapsuleServiceRow[];
     const total = db.prepare(`select count(*) as count from capsule_services where ${where}`).get(...values) as { count: number };
-    return { success: true, data: rows.map(publicCapsuleService), pagination: { page, pageSize, total: total.count } };
+    return { success: true, data: publicCapsuleServicesWithFreshness(db, rows, config), pagination: { page, pageSize, total: total.count } };
   });
 
   app.get("/api/admin/capsule-services/:serviceId", async (req) => {
@@ -1408,10 +1596,12 @@ export async function buildApp(options: BuildAppOptions = {}) {
     const configs = db.prepare("select * from config_items where serviceId = ? order by configKey asc").all(serviceId);
     const actions = db.prepare("select * from action_definitions where serviceId = ? order by name asc").all(serviceId) as ActionDefinitionRow[];
     const health = db.prepare("select * from health_reports where serviceId = ? order by reportedAt desc limit 1").get(serviceId) as { status: string; message: string | null; detailsJson: string | null; reportedAt: string } | undefined;
+    const ownerAgent = row.agentId ? (db.prepare("select * from agents where id = ?").get(row.agentId) as AgentRow | undefined) : undefined;
+    const effective = deriveEffectiveStatus(row, ownerAgent, config.OPSTAGE_AGENT_OFFLINE_THRESHOLD_SECONDS);
     return {
       success: true,
       data: {
-        ...publicCapsuleService(row),
+        ...publicCapsuleService(row, effective),
         manifest: jsonParse(row.manifestJson),
         health: health ? { ...health, details: jsonParse(health.detailsJson) } : null,
         configs,
@@ -1475,7 +1665,17 @@ export async function buildApp(options: BuildAppOptions = {}) {
     const agent = authenticateAgent(req, db, agentId);
     const body = agentHeartbeatRequestSchema.parse(req.body ?? {});
     const ts = now();
-    db.prepare("update agents set status = 'ONLINE', lastHeartbeatAt = ?, updatedAt = ? where id = ?").run(ts, ts, agent.id);
+    // Always refresh the freshness timestamp — that's the source-of-truth for
+    // "is this agent alive". Only write the `status` column on the actual
+    // OFFLINE → ONLINE transition; otherwise we'd issue a no-op UPDATE on
+    // every heartbeat (one per agent every 30s).
+    if (agent.status !== "ONLINE") {
+      db.prepare(
+        "update agents set status = 'ONLINE', lastHeartbeatAt = ?, updatedAt = ? where id = ? and status not in ('REVOKED', 'DISABLED')"
+      ).run(ts, ts, agent.id);
+    } else {
+      db.prepare("update agents set lastHeartbeatAt = ?, updatedAt = ? where id = ?").run(ts, ts, agent.id);
+    }
     const lastAuditMs = lastHeartbeatAuditAt.get(agent.id) ?? 0;
     if (Date.now() - lastAuditMs >= HEARTBEAT_AUDIT_INTERVAL_MS) {
       writeAudit(db, { actorType: "AGENT", actorId: agent.id, action: "agent.heartbeat.received", targetType: "Agent", targetId: agent.id });
@@ -1496,7 +1696,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     const agent = authenticateAgent(req, db, agentId);
     const body = serviceReportRequestSchema.parse(req.body);
     const upserted = body.services.map(service => upsertReportedService(db, agent, service));
-    const services = upserted.map(publicCapsuleService);
+    const services = publicCapsuleServicesWithFreshness(db, upserted, config);
     for (const svc of upserted) {
       writeAudit(db, { actorType: "AGENT", actorId: agentId, action: "service.reported", targetType: "CapsuleService", targetId: svc.id });
     }
@@ -1692,7 +1892,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
 
   app.get("/api/admin/metrics", async (req) => {
     getSessionUser(req, db, config);
-    return { success: true, data: collectMetrics(db, runtimeCounters) };
+    return { success: true, data: collectMetrics(db, runtimeCounters, config) };
   });
 
   app.get("/api/admin/diagnostics/runtime", async (req) => {
@@ -1759,9 +1959,23 @@ export async function buildApp(options: BuildAppOptions = {}) {
     }
     const ts = now();
     const resultId = createId("crs");
+    // On failure, lift the most actionable fields out of the agent-reported
+    // result and into the commands row itself. This lets the list /detail
+    // endpoints and the UI surface "why" without joining command_results
+    // every time. The full body still lands in command_results.errorJson.
+    const errInfo = body.success
+      ? { code: null as string | null, message: null as string | null }
+      : extractCommandFailureReason(body);
     const completed = db.prepare(
-      "update commands set status = ?, completedAt = ?, updatedAt = ? where id = ? and status in ('PENDING', 'RUNNING')"
-    ).run(body.success ? "SUCCEEDED" : "FAILED", ts, ts, command.id).changes;
+      "update commands set status = ?, completedAt = ?, updatedAt = ?, errorCode = ?, errorMessage = ? where id = ? and status in ('PENDING', 'RUNNING')"
+    ).run(
+      body.success ? "SUCCEEDED" : "FAILED",
+      ts,
+      ts,
+      errInfo.code,
+      errInfo.message,
+      command.id,
+    ).changes;
     if (completed === 0) {
       throw Object.assign(new Error("Command is already completed."), { statusCode: 409, code: "COMMAND_ALREADY_COMPLETED" });
     }

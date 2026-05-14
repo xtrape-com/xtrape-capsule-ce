@@ -36,7 +36,17 @@ async function refreshCsrfToken(): Promise<void> {
   setCsrfToken(envelope.data.csrfToken);
 }
 
-export async function apiFetch<T>(path: string, options: RequestInit = {}, retryOnCsrf = true): Promise<T> {
+/**
+ * Internal: the single fetch primitive every request flows through. Handles
+ * CSRF header injection, CSRF-refresh-and-retry on 403, envelope parsing,
+ * and ApiError mapping. Returns the full envelope so list callers can also
+ * read `pagination` without making a parallel fetch path.
+ */
+async function apiRequest<T>(
+  path: string,
+  options: RequestInit = {},
+  retryOnCsrf = true,
+): Promise<ApiEnvelope<T>> {
   const headers = new Headers(options.headers);
   if (options.body && !headers.has("content-type")) headers.set("content-type", "application/json");
   if (!["GET", "HEAD"].includes((options.method ?? "GET").toUpperCase()) && csrfToken) {
@@ -46,25 +56,31 @@ export async function apiFetch<T>(path: string, options: RequestInit = {}, retry
   const response = await fetch(path, {
     ...options,
     headers,
-    credentials: "include"
+    credentials: "include",
   });
   const envelope = (await response.json().catch(() => ({}))) as ApiEnvelope<T>;
   if (response.status === 403 && envelope.error?.code === "CSRF_INVALID" && retryOnCsrf) {
     await refreshCsrfToken();
-    return apiFetch<T>(path, options, false);
+    return apiRequest<T>(path, options, false);
   }
   if (!response.ok || envelope.success === false) {
-    throw new ApiError(response.status, envelope.error?.code ?? "REQUEST_ERROR", envelope.error?.message ?? response.statusText, envelope.error?.details);
+    throw new ApiError(
+      response.status,
+      envelope.error?.code ?? "REQUEST_ERROR",
+      envelope.error?.message ?? response.statusText,
+      envelope.error?.details,
+    );
   }
+  return envelope;
+}
+
+export async function apiFetch<T>(path: string, options: RequestInit = {}, retryOnCsrf = true): Promise<T> {
+  const envelope = await apiRequest<T>(path, options, retryOnCsrf);
   return envelope.data;
 }
 
 export async function apiList<T>(path: string): Promise<{ data: T[]; pagination?: ApiEnvelope<T[]>["pagination"] }> {
-  const response = await fetch(path, { credentials: "include" });
-  const envelope = (await response.json()) as ApiEnvelope<T[]>;
-  if (!response.ok || envelope.success === false) {
-    throw new ApiError(response.status, envelope.error?.code ?? "REQUEST_ERROR", envelope.error?.message ?? response.statusText, envelope.error?.details);
-  }
+  const envelope = await apiRequest<T[]>(path);
   return { data: envelope.data, pagination: envelope.pagination };
 }
 
