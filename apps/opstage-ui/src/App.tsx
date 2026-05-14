@@ -8,6 +8,12 @@ import { useI18n } from "./i18n.js";
 import { LanguageSwitcher } from "./pages/LanguageSwitcher.js";
 import { LoginPage } from "./pages/LoginPage.js";
 import { DashboardPage } from "./pages/DashboardPage.js";
+import { UsersPage } from "./pages/UsersPage.js";
+import { RegistrationTokensPage } from "./pages/RegistrationTokensPage.js";
+import { AgentsPage } from "./pages/AgentsPage.js";
+import { CommandsPage } from "./pages/CommandsPage.js";
+import { AuditEventsPage } from "./pages/AuditEventsPage.js";
+import { SettingsPage } from "./pages/SettingsPage.js";
 import { queryString, searchFilters, sameFilters, useQueryData, downloadBlob } from "./lib/list-helpers.js";
 import type {
   AccountStatus,
@@ -55,167 +61,16 @@ function Shell({ session, onLogout }: { session: SessionData; onLogout: () => vo
       </Layout.Header>
       <Layout.Content style={{ padding: 24 }}><Routes>
         <Route path="/" element={<DashboardPage />} />
-        <Route path="/users" element={<Users />} />
-        <Route path="/registration-tokens" element={<RegistrationTokens />} />
-        <Route path="/agents" element={<Agents />} />
+        <Route path="/users" element={<UsersPage />} />
+        <Route path="/registration-tokens" element={<RegistrationTokensPage />} />
+        <Route path="/agents" element={<AgentsPage />} />
         <Route path="/services" element={<Services />} />
-        <Route path="/commands" element={<Commands />} />
-        <Route path="/audit-events" element={<AuditEvents />} />
-        <Route path="/settings" element={<Settings />} />
+        <Route path="/commands" element={<CommandsPage />} />
+        <Route path="/audit-events" element={<AuditEventsPage />} />
+        <Route path="/settings" element={<SettingsPage />} />
       </Routes></Layout.Content>
     </Layout>
   </Layout>;
-}
-
-function Users() {
-  const { t } = useI18n();
-  const [filters, setFilters] = React.useState<{ q?: string; role?: string; status?: string }>({});
-  const [page, setPage] = React.useState<PageState>(defaultPage);
-  const updateFilters = (next: { q?: string; role?: string; status?: string }) => { setFilters(next); setPage(defaultPage); };
-  const { data, loading, error, reload } = useQueryData(() => apiList<User>(`/api/admin/users${queryString({ ...filters, ...page })}`), [filters.q, filters.role, filters.status, page.page, page.pageSize]);
-  const [createOpen, setCreateOpen] = React.useState(false);
-  const [editTarget, setEditTarget] = React.useState<User | null>(null);
-  const [resetTarget, setResetTarget] = React.useState<User | null>(null);
-  if (error) return <Card title={t("user.title")}><Typography.Text type="danger">{error}</Typography.Text></Card>;
-  return <Card title={t("user.title")} extra={<Space><Button onClick={reload}>{t("action.refresh")}</Button><Button type="primary" onClick={() => setCreateOpen(true)}>{t("user.createTitle")}</Button></Space>}>
-    <Modal open={createOpen} title={t("user.createTitle")} footer={null} onCancel={() => setCreateOpen(false)} destroyOnClose>
-      <Form layout="vertical" initialValues={{ role: "viewer" }} onFinish={async (values) => { await apiFetch<User>("/api/admin/users", { method: "POST", body: JSON.stringify(values) }); message.success(t("user.created")); setCreateOpen(false); void reload(); }}>
-        <Form.Item name="username" label={t("login.username")} rules={[{ required: true }]}><Input /></Form.Item>
-        <Form.Item name="displayName" label={t("common.displayName")}><Input /></Form.Item>
-        <Form.Item name="role" label={t("common.role")} rules={[{ required: true }]}><Select options={["owner", "operator", "viewer"].map(value => ({ value, label: value }))} /></Form.Item>
-        <Form.Item name="password" label={t("user.initialPassword")} rules={[{ required: true, min: 12 }]}><Input.Password /></Form.Item>
-        <Button type="primary" htmlType="submit">{t("action.create")}</Button>
-      </Form>
-    </Modal>
-    <Modal open={!!editTarget} title={t("user.updateTitle")} footer={null} onCancel={() => setEditTarget(null)} destroyOnClose>
-      {editTarget && <Form layout="vertical" initialValues={{ displayName: editTarget.displayName, role: editTarget.role, status: editTarget.status }} onFinish={async (values) => { await apiFetch(`/api/admin/users/${editTarget.id}`, { method: "PATCH", body: JSON.stringify(values) }); message.success(t("user.updated")); setEditTarget(null); void reload(); }}>
-        <Form.Item name="displayName" label={t("common.displayName")}><Input /></Form.Item>
-        <Form.Item name="role" label={t("common.role")} rules={[{ required: true }]}><Select options={["owner", "operator", "viewer"].map(value => ({ value, label: value }))} /></Form.Item>
-        <Form.Item name="status" label={t("common.status")} rules={[{ required: true }]}><Select options={["ACTIVE", "DISABLED"].map(value => ({ value, label: value }))} /></Form.Item>
-        <Button type="primary" htmlType="submit">{t("action.edit")}</Button>
-      </Form>}
-    </Modal>
-    <Modal open={!!resetTarget} title={t("user.resetPasswordTitle")} footer={null} onCancel={() => setResetTarget(null)} destroyOnClose>
-      <Form layout="vertical" onFinish={async (values) => { if (!resetTarget) return; await apiFetch(`/api/admin/users/${resetTarget.id}/reset-password`, { method: "POST", body: JSON.stringify({ password: values.password }) }); message.success(t("user.passwordReset")); setResetTarget(null); void reload(); }}>
-        <Form.Item name="password" label={t("user.newPassword")} rules={[{ required: true, min: 12 }]}><Input.Password /></Form.Item>
-        <Button type="primary" htmlType="submit">{t("user.resetPassword")}</Button>
-      </Form>
-    </Modal>
-    <Space style={{ marginBottom: 16 }} wrap>
-      <Input.Search placeholder={t("user.searchPlaceholder")} allowClear onSearch={(q) => updateFilters({ ...filters, q })} style={{ width: 260 }} />
-      <Select allowClear placeholder={t("common.role")} style={{ width: 160 }} onChange={(role) => updateFilters({ ...filters, role })} options={["owner", "operator", "viewer"].map(value => ({ value, label: value }))} />
-      <Select allowClear placeholder={t("common.status")} style={{ width: 160 }} onChange={(status) => updateFilters({ ...filters, status })} options={["ACTIVE", "DISABLED"].map(value => ({ value, label: value }))} />
-      <Button onClick={() => updateFilters({})}>{t("user.resetFilters")}</Button>
-    </Space>
-    <Table rowKey="id" loading={loading} dataSource={data?.data ?? []} pagination={{ current: data?.pagination?.page ?? page.page, pageSize: data?.pagination?.pageSize ?? page.pageSize, total: data?.pagination?.total, showSizeChanger: true, onChange: (nextPage, nextPageSize) => setPage({ page: nextPage, pageSize: nextPageSize }) }} columns={[
-      { title: t("common.username"), dataIndex: "username" }, { title: t("common.displayName"), dataIndex: "displayName" }, { title: t("common.role"), dataIndex: "role", render: (v) => <Tag>{v}</Tag> }, { title: t("common.status"), dataIndex: "status", render: (v) => <StatusTag value={v} /> }, { title: t("user.lastLogin"), dataIndex: "lastLoginAt" },
-      { title: t("common.operation"), render: (_, row) => <Space><Button size="small" onClick={() => setEditTarget(row)}>{t("action.edit")}</Button><Button size="small" onClick={() => setResetTarget(row)}>{t("user.resetPassword")}</Button>{row.status === "ACTIVE" ? <Popconfirm title={t("confirm.disableUser")} onConfirm={async () => { await apiFetch(`/api/admin/users/${row.id}`, { method: "PATCH", body: JSON.stringify({ status: "DISABLED" }) }); message.success(t("user.disabled")); void reload(); }}><Button danger size="small" disabled={row.role === "owner"}>{t("action.disable")}</Button></Popconfirm> : <Button size="small" onClick={async () => { await apiFetch(`/api/admin/users/${row.id}`, { method: "PATCH", body: JSON.stringify({ status: "ACTIVE" }) }); message.success(t("user.enabled")); void reload(); }}>{t("action.enable")}</Button>}</Space> }
-    ] as ColumnsType<User>} />
-  </Card>;
-}
-
-function RegistrationTokens() {
-  const { t } = useI18n();
-  const [filters, setFilters] = React.useState<{ status?: string }>({});
-  const [page, setPage] = React.useState<PageState>(defaultPage);
-  const updateFilters = (next: { status?: string }) => { setFilters(next); setPage(defaultPage); };
-  const { data, loading, reload } = useQueryData(() => apiList<RegistrationToken>(`/api/admin/registration-tokens${queryString({ ...filters, ...page })}`), [filters.status, page.page, page.pageSize]);
-  const [created, setCreated] = React.useState<RegistrationToken | null>(null);
-  const [createOpen, setCreateOpen] = React.useState(false);
-  const createdTokenValue = created?.token ?? created?.rawToken ?? "";
-  const copyCreatedToken = async () => {
-    if (!createdTokenValue) return;
-    await navigator.clipboard.writeText(createdTokenValue);
-    message.success(t("registration.copySuccess"));
-  };
-  return <Card title={t("registration.title")} extra={<Space><Button onClick={reload}>{t("action.refresh")}</Button><Button type="primary" onClick={() => setCreateOpen(true)}>{t("action.create")}</Button></Space>}>
-    {created && <Card type="inner" title={t("registration.createdOnce")} style={{ marginBottom: 16 }} extra={createdTokenValue ? <Button onClick={() => void copyCreatedToken()}>{t("registration.copyToken")}</Button> : null}>{createdTokenValue ? <Input.TextArea value={createdTokenValue} autoSize readOnly /> : <Typography.Text type="danger">{t("registration.tokenUnavailable")}</Typography.Text>}</Card>}
-    <Space style={{ marginBottom: 16 }} wrap>
-      <Select allowClear placeholder={t("common.status")} style={{ width: 180 }} onChange={(status) => updateFilters({ ...filters, status })} options={["ACTIVE", "USED", "REVOKED", "EXPIRED"].map(value => ({ value, label: value }))} />
-      <Button onClick={() => updateFilters({})}>{t("registration.resetFilters")}</Button>
-    </Space>
-    <Modal open={createOpen} title={t("registration.createTitle")} footer={null} onCancel={() => setCreateOpen(false)} destroyOnClose>
-      <CreateTokenForm onCreated={(token) => { setCreated(token); setCreateOpen(false); void reload(); }} />
-    </Modal>
-    <Table rowKey="id" loading={loading} dataSource={data?.data ?? []} pagination={{ current: data?.pagination?.page ?? page.page, pageSize: data?.pagination?.pageSize ?? page.pageSize, total: data?.pagination?.total, showSizeChanger: true, onChange: (nextPage, nextPageSize) => setPage({ page: nextPage, pageSize: nextPageSize }) }} columns={[
-      { title: t("common.name"), dataIndex: "name" }, { title: t("common.status"), dataIndex: "status", render: (v) => <StatusTag value={v} /> }, { title: t("registration.token"), render: (_, row) => row.id === created?.id && createdTokenValue ? <Input value={createdTokenValue} readOnly /> : <Typography.Text type="secondary">{t("registration.tokenHidden")}</Typography.Text> }, { title: "Agent", dataIndex: "agentId" }, { title: t("registration.expiresAt"), dataIndex: "expiresAt", render: (v) => v ?? "-" }, { title: t("common.createdAt"), dataIndex: "createdAt" },
-      { title: t("common.operation"), render: (_, row) => <Space>{row.id === created?.id && createdTokenValue ? <Button onClick={() => void copyCreatedToken()}>{t("registration.copyToken")}</Button> : null}{row.status === "ACTIVE" ? <Popconfirm title={t("confirm.revokeToken")} onConfirm={async () => { await apiFetch(`/api/admin/registration-tokens/${row.id}/revoke`, { method: "POST" }); message.success(t("registration.revoked")); void reload(); }}><Button danger>{t("action.revoke")}</Button></Popconfirm> : null}{["EXPIRED", "REVOKED"].includes(row.status) ? <Popconfirm title={t("confirm.deleteToken")} onConfirm={async () => { await apiFetch(`/api/admin/registration-tokens/${row.id}`, { method: "DELETE" }); message.success(t("registration.deleted")); if (created?.id === row.id) setCreated(null); void reload(); }}><Button danger>{t("action.delete")}</Button></Popconfirm> : null}</Space> }
-    ] as ColumnsType<RegistrationToken>} />
-  </Card>;
-}
-
-function CreateTokenForm({ onCreated }: { onCreated: (token: RegistrationToken) => void }) {
-  const { t } = useI18n();
-  const [submitting, setSubmitting] = React.useState(false);
-  return <Form id="create-token" layout="vertical" onFinish={async (values) => {
-    const body = Object.fromEntries(Object.entries(values as Record<string, unknown>).filter(([, value]) => value !== undefined && value !== null && value !== ""));
-    setSubmitting(true);
-    try {
-      const token = await apiFetch<RegistrationToken>("/api/admin/registration-tokens", { method: "POST", body: JSON.stringify(body) });
-      onCreated(token);
-    } catch (err) {
-      message.error(err instanceof Error ? err.message : t("login.failed"));
-    } finally {
-      setSubmitting(false);
-    }
-  }}>
-    <Form.Item name="name" label={t("common.name")} rules={[{ required: true }]}><Input placeholder="demo-agent" /></Form.Item>
-    <Form.Item name="expiresInSeconds" label={t("registration.expiresInSeconds")}><InputNumber min={60} style={{ width: "100%" }} placeholder={t("form.optional")} /></Form.Item>
-    <Button type="primary" htmlType="submit" loading={submitting}>{t("action.create")}</Button>
-  </Form>;
-}
-
-function Agents() {
-  const { t } = useI18n();
-  const location = useLocation();
-  const navigate = useNavigate();
-  const [filters, setFilters] = React.useState<{ q?: string; status?: string }>(() => searchFilters<{ q?: string; status?: string }>(location.search, ["q", "status"], {}));
-  const [qDraft, setQDraft] = React.useState(filters.q ?? "");
-  const [page, setPage] = React.useState<PageState>(defaultPage);
-  const updateFilters = (next: { q?: string; status?: string }) => {
-    setFilters(next);
-    setPage(defaultPage);
-    navigate(`${location.pathname}${queryString(next)}`, { replace: true });
-  };
-  const { data, loading, reload } = useQueryData(() => apiList<Agent>(`/api/admin/agents${queryString({ ...filters, ...page })}`), [filters.q, filters.status, page.page, page.pageSize]);
-  const [selected, setSelected] = React.useState<Agent | null>(null);
-  const [refreshing, setRefreshing] = React.useState(false);
-  React.useEffect(() => {
-    const next = searchFilters<{ q?: string; status?: string }>(location.search, ["q", "status"], {});
-    setFilters(current => sameFilters(current, next) ? current : next);
-    setQDraft(next.q ?? "");
-    setPage(defaultPage);
-  }, [location.search]);
-  const openAgent = async (id: string) => setSelected(await apiFetch<Agent>(`/api/admin/agents/${id}`));
-  const refreshAgents = async () => {
-    setRefreshing(true);
-    try {
-      await reload();
-      if (selected) await openAgent(selected.id);
-      message.success(t("common.refreshed"));
-    } catch (err) {
-      message.error(err instanceof Error ? err.message : String(err));
-    } finally {
-      setRefreshing(false);
-    }
-  };
-  const openAgentServices = (agentId: string) => navigate(`/services?agentId=${encodeURIComponent(agentId)}`);
-  return <Card title={t("menu.agents")} extra={<Button loading={refreshing} onClick={() => void refreshAgents()}>{t("action.refresh")}</Button>}>
-    <Space style={{ marginBottom: 16 }} wrap>
-      <Input.Search placeholder={t("common.searchCodeName")} allowClear value={qDraft} onChange={(event) => setQDraft(event.target.value)} onSearch={(q) => updateFilters({ ...filters, q })} style={{ width: 240 }} />
-      <Select allowClear placeholder={t("common.status")} style={{ width: 160 }} value={filters.status} onChange={(status) => updateFilters({ ...filters, status })} options={["PENDING", "ONLINE", "OFFLINE", "DISABLED", "REVOKED"].map(value => ({ value, label: value }))} />
-      <Button onClick={() => { setQDraft(""); updateFilters({}); }}>{t("agent.resetFilters")}</Button>
-    </Space>
-    <Table rowKey="id" loading={loading} dataSource={data?.data ?? []} scroll={{ x: 1200 }} pagination={{ current: data?.pagination?.page ?? page.page, pageSize: data?.pagination?.pageSize ?? page.pageSize, total: data?.pagination?.total, showSizeChanger: true, onChange: (nextPage, nextPageSize) => setPage({ page: nextPage, pageSize: nextPageSize }) }} onRow={(row) => ({ onClick: () => void openAgent(row.id) })} columns={[
-      { title: t("common.id"), dataIndex: "id", render: (v) => <Typography.Text code copyable>{String(v)}</Typography.Text> }, { title: t("common.code"), dataIndex: "code" }, { title: t("common.name"), dataIndex: "name" }, { title: t("common.mode"), dataIndex: "mode" }, { title: t("common.runtime"), dataIndex: "runtime" }, { title: t("common.status"), dataIndex: "status", render: (v) => <StatusTag value={v} /> }, { title: "Heartbeat", dataIndex: "lastHeartbeatAt" },
-      { title: t("common.operation"), render: (_, row) => <Space>{row.status === "REVOKED" ? null : row.status === "DISABLED" ? <Popconfirm title={t("confirm.enableAgent")} onConfirm={async (event) => { event?.stopPropagation(); await apiFetch(`/api/admin/agents/${row.id}/enable`, { method: "POST" }); message.success(t("user.enabled")); void reload(); }}><Button size="small" onClick={(event) => event.stopPropagation()}>{t("action.enable")}</Button></Popconfirm> : <Popconfirm title={t("confirm.disableAgent")} onConfirm={async (event) => { event?.stopPropagation(); await apiFetch(`/api/admin/agents/${row.id}/disable`, { method: "POST" }); message.success(t("user.disabled")); void reload(); }}><Button size="small" onClick={(event) => event.stopPropagation()}>{t("action.disable")}</Button></Popconfirm>}<Button size="small" onClick={(event) => { event.stopPropagation(); openAgentServices(row.id); }}>{t("agent.viewServices")}</Button>{row.status === "REVOKED" ? null : <Popconfirm title={t("confirm.revokeAgent")} onConfirm={async (event) => { event?.stopPropagation(); await apiFetch(`/api/admin/agents/${row.id}/revoke`, { method: "POST" }); message.success(t("registration.revoked")); void reload(); }}><Button danger size="small" onClick={(event) => event.stopPropagation()}>{t("action.revoke")}</Button></Popconfirm>}</Space> }
-    ] as ColumnsType<Agent>} />
-    <Drawer open={!!selected} onClose={() => setSelected(null)} title={selected?.code} width={780} extra={<Button disabled={!selected} loading={refreshing} onClick={() => void refreshAgents()}>{t("action.refresh")}</Button>}>
-      <Descriptions bordered column={1} items={selected ? Object.entries(selected).filter(([k]) => k !== "services").map(([key, value]) => ({ key, label: key, children: key === "id" ? <Typography.Text code copyable>{String(value ?? "-")}</Typography.Text> : String(value ?? "-") })) : []} />
-      <Typography.Title level={4} style={{ marginTop: 24 }}>{t("menu.services")}</Typography.Title>
-      <Table rowKey="id" dataSource={selected?.services ?? []} pagination={false} columns={[{ title: t("common.code"), dataIndex: "code" }, { title: t("common.name"), dataIndex: "name" }, { title: t("common.health"), dataIndex: "healthStatus", render: (v) => <StatusTag value={v} /> }]} />
-    </Drawer>
-  </Card>;
 }
 
 function Services() {
@@ -425,31 +280,13 @@ export function resolveRowPayload(template: Record<string, unknown> | undefined,
   return resolve(template ?? {}) as Record<string, unknown>;
 }
 
-export function formatDurationMs(value: unknown): string {
-  const ms = Number(value);
-  if (!Number.isFinite(ms)) return "-";
-  if (Math.abs(ms) < 1000) return `${ms}ms`;
-  const seconds = ms / 1000;
-  if (Math.abs(seconds) < 60) return `${seconds.toFixed(seconds < 10 ? 1 : 0)}s`;
-  const minutes = seconds / 60;
-  if (Math.abs(minutes) < 60) return `${minutes.toFixed(minutes < 10 ? 1 : 0)}m`;
-  const hours = minutes / 60;
-  return `${hours.toFixed(hours < 10 ? 1 : 0)}h`;
-}
-
-export function formatBytes(value: unknown): string {
-  const bytes = Number(value);
-  if (!Number.isFinite(bytes)) return "-";
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  let size = Math.abs(bytes);
-  let index = 0;
-  while (size >= 1024 && index < units.length - 1) {
-    size /= 1024;
-    index += 1;
-  }
-  const signed = bytes < 0 ? -size : size;
-  return `${signed.toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
-}
+// Re-exports preserved so existing tests / external callers that
+// imported these helpers from "./App.js" keep working. They now live in
+// ./lib/format and ./lib/metrics.
+import { formatBytes, formatDurationMs } from "./lib/format.js";
+import { diagnosticRows, hasMetricWarning, metricRows } from "./lib/metrics.js";
+export { formatBytes, formatDurationMs };
+export { diagnosticRows, hasMetricWarning, metricRows };
 
 export function formatRelativeTime(value: unknown): string {
   const timestamp = typeof value === "number" ? value : Date.parse(String(value ?? ""));
@@ -843,246 +680,6 @@ function accountStatusesFromHealth(health: Record<string, unknown> | null | unde
   if (!details || typeof details !== "object" || Array.isArray(details)) return [];
   const accounts = (details as { accounts?: unknown }).accounts;
   return Array.isArray(accounts) ? accounts.filter((item): item is AccountStatus => Boolean(item) && typeof item === "object") : [];
-}
-
-function Commands() {
-  const { t } = useI18n();
-  const location = useLocation();
-  const navigate = useNavigate();
-  type CommandFilters = { status?: string; type?: string; actionName?: string; agentId?: string; serviceId?: string };
-  const [filters, setFilters] = React.useState<CommandFilters>(() => searchFilters<CommandFilters>(location.search, ["status", "type", "actionName", "agentId", "serviceId"], { type: "ACTION_EXECUTE" }));
-  const [actionNameDraft, setActionNameDraft] = React.useState(filters.actionName ?? "");
-  const [idFilters, setIdFilters] = React.useState<{ agentId?: string; serviceId?: string }>({ agentId: filters.agentId, serviceId: filters.serviceId });
-  const [page, setPage] = React.useState<PageState>(defaultPage);
-  const updateFilters = (next: CommandFilters) => {
-    setFilters(next);
-    setPage(defaultPage);
-    navigate(`${location.pathname}${queryString(next)}`, { replace: true });
-  };
-  const { data, loading, reload } = useQueryData(() => apiList<Command>(`/api/admin/commands${queryString({ ...filters, ...page })}`), [filters.status, filters.type, filters.actionName, filters.agentId, filters.serviceId, page.page, page.pageSize], 5000);
-  const [selected, setSelected] = React.useState<Command | null>(null);
-  const openCommand = async (id: string) => setSelected(await apiFetch<Command>(`/api/admin/commands/${id}`));
-  const commandHint = filters.type === "ACTION_EXECUTE" ? t("command.defaultFilterHint") : filters.type ? t("command.filteredTypeHint", { type: filters.type }) : t("command.allTypesHint");
-  React.useEffect(() => {
-    const next = searchFilters<CommandFilters>(location.search, ["status", "type", "actionName", "agentId", "serviceId"], { type: "ACTION_EXECUTE" });
-    setFilters(current => sameFilters(current, next) ? current : next);
-    setActionNameDraft(next.actionName ?? "");
-    setIdFilters({ agentId: next.agentId, serviceId: next.serviceId });
-    setPage(defaultPage);
-  }, [location.search]);
-  return <Card title={t("command.title")} extra={<Button onClick={reload}>{t("action.refresh")}</Button>}>
-    <Alert type="info" showIcon style={{ marginBottom: 16 }} message={commandHint} />
-    <Space style={{ marginBottom: 16 }} wrap>
-      <Input.Search placeholder={t("command.actionName")} allowClear value={actionNameDraft} onChange={(event) => setActionNameDraft(event.target.value)} onSearch={(actionName) => updateFilters({ ...filters, actionName })} style={{ width: 220 }} />
-      <Select allowClear placeholder={t("command.type")} style={{ width: 180 }} value={filters.type} onChange={(type) => updateFilters({ ...filters, type })} options={["ACTION_EXECUTE", "ACTION_PREPARE"].map(value => ({ value, label: value }))} />
-      <Select allowClear placeholder={t("common.status")} style={{ width: 180 }} value={filters.status} onChange={(status) => updateFilters({ ...filters, status })} options={["PENDING", "RUNNING", "SUCCEEDED", "FAILED", "CANCELLED", "EXPIRED"].map(value => ({ value, label: value }))} />
-      <Input placeholder={t("command.agentId")} allowClear value={idFilters.agentId} onChange={(event) => setIdFilters({ ...idFilters, agentId: event.target.value })} style={{ width: 220 }} />
-      <Input placeholder={t("command.serviceId")} allowClear value={idFilters.serviceId} onChange={(event) => setIdFilters({ ...idFilters, serviceId: event.target.value })} style={{ width: 220 }} />
-      <Button onClick={() => updateFilters({ ...filters, agentId: idFilters.agentId, serviceId: idFilters.serviceId })}>{t("command.applyIdFilters")}</Button>
-      <Button onClick={() => updateFilters({ ...filters, type: undefined })}>{t("command.showAllTypes")}</Button>
-      <Button onClick={() => { setActionNameDraft(""); setIdFilters({}); updateFilters({ type: "ACTION_EXECUTE" }); }}>{t("command.resetFilters")}</Button>
-    </Space>
-    <Table rowKey="id" loading={loading} dataSource={data?.data ?? []} scroll={{ x: 1400 }} pagination={{ current: data?.pagination?.page ?? page.page, pageSize: data?.pagination?.pageSize ?? page.pageSize, total: data?.pagination?.total, showSizeChanger: true, onChange: (nextPage, nextPageSize) => setPage({ page: nextPage, pageSize: nextPageSize }) }} onRow={(row) => ({ onClick: () => void openCommand(row.id) })} columns={[
-      { title: t("common.id"), dataIndex: "id", render: (v) => <Typography.Text code copyable>{String(v)}</Typography.Text> },
-      { title: t("command.type"), dataIndex: "type", render: (v) => <Tag>{String(v)}</Tag> },
-      { title: "Action", dataIndex: "actionName" },
-      { title: t("common.status"), dataIndex: "status", render: (v) => <StatusTag value={v} /> },
-      { title: t("command.agentId"), dataIndex: "agentId", render: (v) => <Typography.Text code copyable>{String(v)}</Typography.Text> },
-      { title: t("command.serviceId"), dataIndex: "serviceId", render: (v) => <Typography.Text code copyable>{String(v)}</Typography.Text> },
-      { title: t("common.createdAt"), dataIndex: "createdAt" }, { title: t("command.completedAt"), dataIndex: "completedAt" },
-      { title: t("command.duration"), dataIndex: "durationMs", render: (v) => typeof v === "number" ? formatDurationMs(v) : "-" },
-      { title: t("command.errorCode"), dataIndex: "errorCode", render: (v) => v ? <Typography.Text type="danger" code>{String(v)}</Typography.Text> : "-" },
-      { title: t("common.operation"), render: (_, row) => <Space>{["PENDING", "RUNNING"].includes(row.status) ? <Popconfirm title={t("confirm.cancelCommand")} onConfirm={async (event) => { event?.stopPropagation(); await apiFetch(`/api/admin/commands/${row.id}/cancel`, { method: "POST" }); message.success(t("command.cancelled")); void reload(); }}><Button danger size="small" onClick={(event) => event.stopPropagation()}>{t("action.cancel")}</Button></Popconfirm> : null}{["FAILED", "EXPIRED", "CANCELLED"].includes(row.status) ? <Popconfirm title={t("confirm.retryCommand")} onConfirm={async (event) => { event?.stopPropagation(); await apiFetch(`/api/admin/commands/${row.id}/retry`, { method: "POST" }); message.success(t("command.retried")); void reload(); }}><Button size="small" onClick={(event) => event.stopPropagation()}>{t("command.retry")}</Button></Popconfirm> : null}</Space> }
-    ] as ColumnsType<Command>} />
-    <Drawer open={!!selected} onClose={() => setSelected(null)} title={selected?.id} width={860} extra={<Button disabled={!selected} onClick={() => selected && void openCommand(selected.id)}>{t("action.refresh")}</Button>}>
-      <Descriptions bordered column={1} items={selected ? [
-        { key: "status", label: t("common.status"), children: <StatusTag value={selected.status} /> },
-        { key: "type", label: t("command.type"), children: <Tag>{selected.type}</Tag> },
-        { key: "action", label: "Action", children: selected.actionName },
-        { key: "agentId", label: t("command.agentId"), children: <Typography.Text code copyable>{selected.agentId}</Typography.Text> },
-        { key: "serviceId", label: t("command.serviceId"), children: <Typography.Text code copyable>{selected.serviceId}</Typography.Text> },
-        { key: "errorCode", label: t("command.errorCode"), children: selected.errorCode ?? "-" },
-        { key: "errorMessage", label: t("command.errorMessage"), children: selected.errorMessage ?? "-" },
-        { key: "createdAt", label: t("command.createdAt"), children: selected.createdAt },
-        { key: "startedAt", label: t("command.startedAt"), children: selected.startedAt ?? "-" },
-        { key: "completedAt", label: t("command.completedAt"), children: selected.completedAt ?? "-" },
-        { key: "duration", label: t("command.duration"), children: typeof selected.durationMs === "number" ? formatDurationMs(selected.durationMs) : "-" }
-      ] : []} />
-      <Collapse style={{ marginTop: 24 }} items={[
-        { key: "payload", label: "Payload", children: <JsonBlock value={selected?.payload} /> },
-        { key: "result", label: "Result / Error", children: <JsonBlock value={selected?.result ?? { errorCode: selected?.errorCode, errorMessage: selected?.errorMessage }} /> }
-      ]} />
-    </Drawer>
-  </Card>;
-}
-
-function AuditEvents() {
-  const { t } = useI18n();
-  const location = useLocation();
-  const navigate = useNavigate();
-  type AuditFilters = { actorType?: string; result?: string; action?: string; targetType?: string; targetId?: string; from?: string; to?: string };
-  const [filters, setFilters] = React.useState<AuditFilters>(() => searchFilters<AuditFilters>(location.search, ["actorType", "result", "action", "targetType", "targetId", "from", "to"], {}));
-  const [actionDraft, setActionDraft] = React.useState(filters.action ?? "");
-  const [targetTypeDraft, setTargetTypeDraft] = React.useState(filters.targetType ?? "");
-  const [targetIdDraft, setTargetIdDraft] = React.useState(filters.targetId ?? "");
-  const [draftRange, setDraftRange] = React.useState<{ from?: string; to?: string }>({ from: filters.from, to: filters.to });
-  const [page, setPage] = React.useState<PageState>(defaultPage);
-  const updateFilters = (next: AuditFilters) => {
-    setFilters(next);
-    setPage(defaultPage);
-    navigate(`${location.pathname}${queryString(next)}`, { replace: true });
-  };
-  const auditQuery = queryString({ ...filters, ...page });
-  const exportCsvQuery = queryString({ ...filters, format: "csv" });
-  const { data, loading, reload } = useQueryData(() => apiList<AuditEvent>(`/api/admin/audit-events${auditQuery}`), [filters.actorType, filters.result, filters.action, filters.targetType, filters.targetId, filters.from, filters.to, page.page, page.pageSize], 5000);
-  React.useEffect(() => {
-    const next = searchFilters<AuditFilters>(location.search, ["actorType", "result", "action", "targetType", "targetId", "from", "to"], {});
-    setFilters(current => sameFilters(current, next) ? current : next);
-    setActionDraft(next.action ?? "");
-    setTargetTypeDraft(next.targetType ?? "");
-    setTargetIdDraft(next.targetId ?? "");
-    setDraftRange({ from: next.from, to: next.to });
-    setPage(defaultPage);
-  }, [location.search]);
-  return <Card title={t("audit.title")} extra={<Space><Button onClick={() => void downloadBlob(`/api/admin/audit-events/export${exportCsvQuery}`, "audit-events.csv")}>{t("action.exportCsv")}</Button><Button onClick={reload}>{t("action.refresh")}</Button></Space>}>
-    <Space style={{ marginBottom: 16 }} wrap>
-      <Input.Search placeholder="Action" allowClear value={actionDraft} onChange={(event) => setActionDraft(event.target.value)} onSearch={(action) => updateFilters({ ...filters, action })} style={{ width: 220 }} />
-      <Select allowClear placeholder="Actor" style={{ width: 140 }} value={filters.actorType} onChange={(actorType) => updateFilters({ ...filters, actorType })} options={["USER", "AGENT", "SYSTEM"].map(value => ({ value, label: value }))} />
-      <Select allowClear placeholder="Result" style={{ width: 140 }} value={filters.result} onChange={(result) => updateFilters({ ...filters, result })} options={["SUCCESS", "FAILURE"].map(value => ({ value, label: value }))} />
-      <Input.Search placeholder={t("audit.targetType")} allowClear value={targetTypeDraft} onChange={(event) => setTargetTypeDraft(event.target.value)} onSearch={(targetType) => updateFilters({ ...filters, targetType })} style={{ width: 180 }} />
-      <Input.Search placeholder={t("audit.targetId")} allowClear value={targetIdDraft} onChange={(event) => setTargetIdDraft(event.target.value)} onSearch={(targetId) => updateFilters({ ...filters, targetId })} style={{ width: 240 }} />
-      <Input placeholder={t("audit.fromPlaceholder")} allowClear value={draftRange.from} onChange={(event) => setDraftRange({ ...draftRange, from: event.target.value })} style={{ width: 260 }} />
-      <Input placeholder={t("audit.toPlaceholder")} allowClear value={draftRange.to} onChange={(event) => setDraftRange({ ...draftRange, to: event.target.value })} style={{ width: 260 }} />
-      <Button onClick={() => updateFilters({ ...filters, from: draftRange.from, to: draftRange.to })}>{t("audit.applyTimeRange")}</Button>
-      <Button onClick={() => { setActionDraft(""); setTargetTypeDraft(""); setTargetIdDraft(""); setDraftRange({}); updateFilters({}); }}>{t("audit.resetFilters")}</Button>
-    </Space>
-    <Table rowKey="id" loading={loading} dataSource={data?.data ?? []} pagination={{ current: data?.pagination?.page ?? page.page, pageSize: data?.pagination?.pageSize ?? page.pageSize, total: data?.pagination?.total, showSizeChanger: true, onChange: (nextPage, nextPageSize) => setPage({ page: nextPage, pageSize: nextPageSize }) }} columns={[{ title: t("common.time"), dataIndex: "createdAt" }, { title: t("common.actor"), dataIndex: "actorType" }, { title: "Action", dataIndex: "action" }, { title: t("audit.targetType"), dataIndex: "targetType" }, { title: t("audit.targetId"), dataIndex: "targetId", render: (v) => v ? <Typography.Text code copyable>{String(v)}</Typography.Text> : "-" }, { title: t("common.result"), dataIndex: "result", render: (v) => <StatusTag value={String(v)} /> }, { title: t("common.message"), dataIndex: "message" }]} />
-  </Card>;
-}
-
-export function metricRows(values: Record<string, number> | undefined): Array<{ key: string; value: number }> {
-  return Object.entries(values ?? {}).map(([key, value]) => ({ key, value })).sort((a, b) => a.key.localeCompare(b.key));
-}
-
-function diagnosticValue(value: unknown): string | number {
-  if (value === undefined || value === null || value === "") return "-";
-  if (typeof value === "number" || typeof value === "string" || typeof value === "boolean") return String(value);
-  return JSON.stringify(value);
-}
-
-export function hasMetricWarning(key: string, value: number): boolean {
-  return value > 0 && ["commandsFailed", "actionPrepareTimeouts", "actionPrepareFailures", "oversizedCommandResultsRejected"].includes(key);
-}
-
-export function diagnosticRows(diagnostics: Record<string, unknown> | null | undefined): DiagnosticRow[] {
-  if (!diagnostics) return [];
-  const memory = diagnostics.memory && typeof diagnostics.memory === "object" ? diagnostics.memory as Record<string, unknown> : {};
-  const config = diagnostics.config && typeof diagnostics.config === "object" ? diagnostics.config as Record<string, unknown> : {};
-  const maintenance = config.maintenance && typeof config.maintenance === "object" ? config.maintenance as Record<string, unknown> : {};
-  const rows: DiagnosticRow[] = [
-    { category: "runtime", key: "version", value: diagnosticValue(diagnostics.version) },
-    { category: "runtime", key: "edition", value: diagnosticValue(diagnostics.edition) },
-    { category: "runtime", key: "node", value: diagnosticValue(diagnostics.node) },
-    { category: "runtime", key: "platform", value: diagnosticValue(diagnostics.platform) },
-    { category: "runtime", key: "arch", value: diagnosticValue(diagnostics.arch) },
-    { category: "runtime", key: "uptimeSeconds", value: diagnosticValue(diagnostics.uptimeSeconds) },
-    { category: "runtime", key: "pid", value: diagnosticValue(diagnostics.pid) },
-    { category: "memory", key: "rss", value: formatBytes(memory.rss) },
-    { category: "memory", key: "heapUsed", value: formatBytes(memory.heapUsed) },
-    { category: "memory", key: "heapTotal", value: formatBytes(memory.heapTotal) },
-    { category: "memory", key: "external", value: formatBytes(memory.external) },
-    { category: "config", key: "host", value: diagnosticValue(config.host) },
-    { category: "config", key: "port", value: diagnosticValue(config.port) },
-    { category: "config", key: "databaseUrl", value: diagnosticValue(config.databaseUrl) },
-    { category: "config", key: "staticDir", value: diagnosticValue(config.staticDir) },
-    { category: "config", key: "backupDir", value: diagnosticValue(config.backupDir) },
-    { category: "maintenance", key: "agentOfflineThresholdSeconds", value: diagnosticValue(maintenance.agentOfflineThresholdSeconds) },
-    { category: "maintenance", key: "auditRetentionDays", value: diagnosticValue(maintenance.auditRetentionDays) },
-    { category: "maintenance", key: "maintenanceIntervalSeconds", value: diagnosticValue(maintenance.maintenanceIntervalSeconds) }
-  ];
-  return rows.filter(row => row.value !== "-");
-}
-
-function MetricStatCard({ title, tooltip, value, warning }: { title: string; tooltip: string; value: number; warning?: boolean }) {
-  return <Card size="small">
-    <Tooltip title={tooltip}><Statistic title={title} value={value} valueStyle={warning ? { color: "#cf1322" } : undefined} /></Tooltip>
-  </Card>;
-}
-
-function Settings() {
-  const { t } = useI18n();
-  const [form] = Form.useForm<MaintenanceSettings>();
-  const { data, loading, reload } = useQueryData<MaintenanceSettings>(() => apiFetch("/api/admin/settings/maintenance"));
-  const metrics = useQueryData<Metrics>(() => apiFetch("/api/admin/metrics"), [], 5000);
-  const diagnostics = useQueryData<Record<string, unknown>>(() => apiFetch("/api/admin/diagnostics/runtime"));
-  const [result, setResult] = React.useState<MaintenanceResult | null>(null);
-  const [running, setRunning] = React.useState(false);
-  const [saving, setSaving] = React.useState(false);
-  React.useEffect(() => { if (data) form.setFieldsValue(data); }, [data, form]);
-  return <Space direction="vertical" size="large" style={{ width: "100%" }}>
-    <Card title={t("settings.maintenanceSettings")} loading={loading} extra={<Button onClick={reload}>{t("action.refresh")}</Button>}>
-      <Form form={form} layout="vertical" onFinish={async (values) => {
-        setSaving(true);
-        try { await apiFetch<MaintenanceSettings>("/api/admin/settings/maintenance", { method: "PATCH", body: JSON.stringify(values) }); message.success(t("settings.saveSuccess")); void reload(); }
-        catch (err) { message.error(err instanceof Error ? err.message : t("settings.maintenanceFailed")); }
-        finally { setSaving(false); }
-      }}>
-        <Form.Item name="agentOfflineThresholdSeconds" label={t("settings.agentOfflineThresholdSeconds")} rules={[{ required: true }]}><InputNumber min={1} style={{ width: "100%" }} /></Form.Item>
-        <Form.Item name="auditRetentionDays" label={t("settings.auditRetentionDays")} rules={[{ required: true }]}><InputNumber min={0} style={{ width: "100%" }} /></Form.Item>
-        <Form.Item name="maintenanceIntervalSeconds" label={t("settings.maintenanceIntervalSeconds")} rules={[{ required: true }]}><InputNumber min={0} style={{ width: "100%" }} /></Form.Item>
-        <Space>
-          <Button type="primary" htmlType="submit" loading={saving}>{t("action.edit")}</Button>
-          <Button loading={running} onClick={async () => {
-            setRunning(true);
-            try { const output = await apiFetch<MaintenanceResult>("/api/admin/maintenance/run", { method: "POST" }); setResult(output); message.success(t("settings.maintenanceSuccess")); }
-            catch (err) { message.error(err instanceof Error ? err.message : t("settings.maintenanceFailed")); }
-            finally { setRunning(false); }
-          }}>{t("action.runMaintenanceNow")}</Button>
-          <Button onClick={() => void downloadBlob("/api/admin/backup/sqlite", "opstage-backup.db", { method: "POST" })}>{t("action.downloadSqliteBackup")}</Button>
-        </Space>
-      </Form>
-    </Card>
-    {result && <Card title={t("settings.lastMaintenanceResult")}><JsonBlock value={result} /></Card>}
-    <Card title={t("settings.metrics")} loading={metrics.loading}>
-      <Space direction="vertical" size="middle" style={{ width: "100%" }}>
-        <Space wrap>
-          <MetricStatCard title={t("metrics.agentCommandPolls")} tooltip={t("metrics.agentCommandPollsHelp")} value={metrics.data?.operational?.agentCommandPolls ?? 0} />
-          <MetricStatCard title={t("metrics.commandsDispatched")} tooltip={t("metrics.commandsDispatchedHelp")} value={metrics.data?.operational?.commandsDispatched ?? 0} />
-          <MetricStatCard title={t("metrics.commandsCompleted")} tooltip={t("metrics.commandsCompletedHelp")} value={metrics.data?.operational?.commandsCompleted ?? 0} />
-          <MetricStatCard title={t("metrics.commandsFailed")} tooltip={t("metrics.commandsFailedHelp")} value={metrics.data?.operational?.commandsFailed ?? 0} warning={hasMetricWarning("commandsFailed", metrics.data?.operational?.commandsFailed ?? 0)} />
-          <MetricStatCard title={t("metrics.prepareFailures")} tooltip={t("metrics.prepareFailuresHelp")} value={(metrics.data?.operational?.actionPrepareTimeouts ?? 0) + (metrics.data?.operational?.actionPrepareFailures ?? 0)} warning={((metrics.data?.operational?.actionPrepareTimeouts ?? 0) + (metrics.data?.operational?.actionPrepareFailures ?? 0)) > 0} />
-          <MetricStatCard title={t("metrics.oversizedResultsRejected")} tooltip={t("metrics.oversizedResultsRejectedHelp")} value={metrics.data?.operational?.oversizedCommandResultsRejected ?? 0} warning={hasMetricWarning("oversizedCommandResultsRejected", metrics.data?.operational?.oversizedCommandResultsRejected ?? 0)} />
-        </Space>
-        <Table
-          size="small"
-          rowKey="key"
-          pagination={false}
-          dataSource={metricRows(metrics.data?.operational)}
-          columns={[
-            { title: t("common.key"), dataIndex: "key" },
-            { title: t("metrics.value"), dataIndex: "value", render: (value, row) => <Typography.Text type={hasMetricWarning(String(row.key), Number(value)) ? "danger" : undefined}>{String(value)}</Typography.Text> }
-          ]}
-        />
-        <Collapse size="small" items={[{ key: "rawMetrics", label: t("metrics.rawJson"), children: <JsonBlock value={metrics.data} /> }]} />
-      </Space>
-    </Card>
-    <Card title={t("settings.diagnostics")} loading={diagnostics.loading}>
-      <Space direction="vertical" size="middle" style={{ width: "100%" }}>
-        <Table
-          size="small"
-          rowKey={(row) => `${row.category}:${row.key}`}
-          pagination={false}
-          dataSource={diagnosticRows(diagnostics.data)}
-          columns={[
-            { title: t("diagnostics.category"), dataIndex: "category", render: (v) => <Tag>{String(v)}</Tag> },
-            { title: t("common.key"), dataIndex: "key" },
-            { title: t("metrics.value"), dataIndex: "value" }
-          ]}
-        />
-        <Collapse size="small" items={[{ key: "rawDiagnostics", label: t("diagnostics.rawJson"), children: <JsonBlock value={diagnostics.data} /> }]} />
-      </Space>
-    </Card>
-  </Space>;
 }
 
 export function App() {
