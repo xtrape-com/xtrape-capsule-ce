@@ -11,6 +11,16 @@ import { requireOperator, requireOwner } from "./rbac.js";
 import { createCsrfToken, createSessionId, hashPassword, signSessionId, verifyPassword, verifySignedSessionId } from "./security.js";
 import { resolveStaticFile, staticContentType } from "./static-ui.js";
 
+/**
+ * Local-development fallback for `OPSTAGE_VERSION` when the process was not
+ * built with a version baked in (e.g. `pnpm dev`). Docker images and tagged
+ * releases always inject `OPSTAGE_VERSION` from the build pipeline, so this
+ * fallback only surfaces in dev / source runs. We intentionally suffix `-dev`
+ * so the value is never mistaken for an actual release on a deployed box.
+ */
+const BACKEND_FALLBACK_VERSION = "0.2.0-dev";
+const BACKEND_EDITION: "ce" = "ce";
+
 export interface BuildAppOptions {
   logger?: boolean;
   config?: Partial<AppConfig>;
@@ -43,7 +53,7 @@ interface RegistrationTokenRow {
   updatedAt: string;
 }
 
-interface AgentRow {
+export interface AgentRow {
   id: string;
   workspaceId: string;
   code: string;
@@ -58,7 +68,7 @@ interface AgentRow {
   updatedAt: string;
 }
 
-interface CapsuleServiceRow {
+export interface CapsuleServiceRow {
   id: string;
   workspaceId: string;
   agentId: string;
@@ -644,19 +654,23 @@ function effectiveServiceStatus(healthStatus: string): string {
  * Returns the stored `row.status` for services whose agent is healthy and
  * reporting on time — that path is the fast common case.
  */
-function deriveEffectiveStatus(
+export function deriveEffectiveStatus(
   row: CapsuleServiceRow,
   agent: AgentRow | undefined,
   offlineThresholdSeconds: number,
   nowMs = Date.now(),
 ): string {
+  // Strong non-operational states: agent is known to be unreachable.
+  // (Missing row, revoked, disabled, or already stored as OFFLINE.)
   if (!agent) return "OFFLINE";
   if (agent.status === "REVOKED" || agent.status === "DISABLED") return "OFFLINE";
-  if (agent.status === "OFFLINE") return "STALE";
-  // agent.status === "ONLINE" || "PENDING" — verify the heartbeat is fresh.
+  if (agent.status === "OFFLINE") return "OFFLINE";
+  // Agent row is ONLINE / PENDING — bridge the gap between heartbeats and the
+  // maintenance sweep: report STALE when the heartbeat is past freshness, even
+  // if the stored agent row hasn't been flipped to OFFLINE yet.
   const lastHbMs = agent.lastHeartbeatAt ? Date.parse(agent.lastHeartbeatAt) : 0;
   if (!lastHbMs || nowMs - lastHbMs > offlineThresholdSeconds * 1000) return "STALE";
-  // Agent is alive; respect the stored status (HEALTHY / UNHEALTHY / UNKNOWN).
+  // Agent is alive and fresh; respect the stored status (HEALTHY / UNHEALTHY / UNKNOWN).
   return row.status;
 }
 
@@ -946,7 +960,7 @@ function collectMetrics(db: Db, counters: RuntimeCounters, config: AppConfig) {
 function runtimeDiagnostics(db: Db, config: AppConfig) {
   const memory = process.memoryUsage();
   return {
-    version: "0.1.0",
+    version: config.OPSTAGE_VERSION ?? BACKEND_FALLBACK_VERSION,
     edition: "CE",
     node: process.version,
     platform: process.platform,
@@ -1185,8 +1199,8 @@ export async function buildApp(options: BuildAppOptions = {}) {
       data: {
         status: overall,
         timestamp: now(),
-        version: config.OPSTAGE_VERSION ?? "0.1.0",
-        edition: "ce" as const,
+        version: config.OPSTAGE_VERSION ?? BACKEND_FALLBACK_VERSION,
+        edition: BACKEND_EDITION,
         database: {
           status: dbStatus,
           kind: "sqlite" as const,
@@ -1205,8 +1219,8 @@ export async function buildApp(options: BuildAppOptions = {}) {
   app.get("/api/system/version", async () => ({
     success: true,
     data: {
-      version: config.OPSTAGE_VERSION ?? "0.1.0",
-      edition: "ce" as const,
+      version: config.OPSTAGE_VERSION ?? BACKEND_FALLBACK_VERSION,
+      edition: BACKEND_EDITION,
       commit: config.OPSTAGE_COMMIT,
       buildTime: config.OPSTAGE_BUILD_TIME
     }
