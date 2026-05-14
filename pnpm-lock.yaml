@@ -24,8 +24,8 @@ importers:
   apps/demo-capsule-service:
     dependencies:
       '@xtrape/capsule-agent-node':
-        specifier: ^0.1.0-public-review.0
-        version: 0.1.0-public-review.0
+        specifier: ^0.2.0
+        version: 0.2.0
     devDependencies:
       '@types/node':
         specifier: ^22.10.2
@@ -46,8 +46,8 @@ importers:
         specifier: ^11.0.2
         version: 11.0.2
       '@xtrape/capsule-contracts-node':
-        specifier: ^0.1.0-public-review.0
-        version: 0.1.0-public-review.0
+        specifier: ^0.2.0
+        version: 0.2.0
       '@xtrape/capsule-db':
         specifier: workspace:*
         version: link:../../packages/db
@@ -1072,8 +1072,16 @@ packages:
     resolution: {integrity: sha512-12dBeegySgQ6BKQJagUjCYTlCJH8O/kP/pLPBsyrXOtU5NEf9hw9q/EBXdjY3WZVRMa7nuTLKdCXa+dQXsBijQ==}
     engines: {node: '>=20'}
 
+  '@xtrape/capsule-agent-node@0.2.0':
+    resolution: {integrity: sha512-di4Hl6RbhnGrMPXU877zW8nYAD2NxaKzGnSbd97OXxVmPN8aZXyjVCq8Z1xMuaD1E5ygaHeWoKoqtExCXYjDPA==}
+    engines: {node: '>=20'}
+
   '@xtrape/capsule-contracts-node@0.1.0-public-review.0':
     resolution: {integrity: sha512-DemjgReCEhqB2rIwTp19l8zvLwU5sPdZUEQXqdNplF7mhUMtDhhDz2VXVoyeP1vK0aVlQQEv8Yx1YXhZNQNHfg==}
+    engines: {node: '>=20'}
+
+  '@xtrape/capsule-contracts-node@0.2.0':
+    resolution: {integrity: sha512-RkoQVDh+9bh34GoLNUOKx1PtqYP/tv3fFGOo+1YGR77yf6irqRRShxG3B3DL/5GLxNWwM90Omgvl/WnKralO/Q==}
     engines: {node: '>=20'}
 
   abstract-logging@2.0.1:
@@ -3091,9 +3099,17 @@ snapshots:
     dependencies:
       '@xtrape/capsule-contracts-node': 0.1.0-public-review.0
 
+  '@xtrape/capsule-agent-node@0.2.0':
+    dependencies:
+      '@xtrape/capsule-contracts-node': 0.2.0
+
   '@xtrape/capsule-contracts-node@0.1.0-public-review.0':
     dependencies:
       nanoid: 5.1.11
+      zod: 3.25.76
+
+  '@xtrape/capsule-contracts-node@0.2.0':
+    dependencies:
       zod: 3.25.76
 
   abstract-logging@2.0.1: {}
