@@ -3,7 +3,7 @@ import path from "node:path";
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import cookie from "@fastify/cookie";
 import { z } from "zod";
-import { adminLoginRequestSchema, agentHeartbeatRequestSchema, createActionCommandRequestSchema, createRegistrationTokenRequestSchema, createUserRequestSchema, registerAgentRequestSchema, reportCommandResultRequestSchema, resetUserPasswordRequestSchema, serviceReportRequestSchema, updateUserRequestSchema, type ReportedService } from "@xtrape/capsule-contracts-node";
+import { adminLoginRequestSchema, agentHeartbeatRequestSchema, createActionCommandRequestSchema, createRegistrationTokenRequestSchema, createUserRequestSchema, reportedServiceSchema, reportCommandResultRequestSchema, resetUserPasswordRequestSchema, serviceReportRequestSchema, updateUserRequestSchema, type ReportedService } from "@xtrape/capsule-contracts-node";
 import { DEFAULT_WORKSPACE, ensureDefaultWorkspace, openDatabase, type Db } from "@xtrape/capsule-db";
 import { createId, hashToken, newToken, redactAuditMetadata, redactSecrets, safeJsonStringify } from "@xtrape/capsule-shared";
 import { type AppConfig, loadConfig } from "./config.js";
@@ -18,8 +18,21 @@ import { resolveStaticFile, staticContentType } from "./static-ui.js";
  * fallback only surfaces in dev / source runs. We intentionally suffix `-dev`
  * so the value is never mistaken for an actual release on a deployed box.
  */
-const BACKEND_FALLBACK_VERSION = "0.2.0-dev";
+const BACKEND_FALLBACK_VERSION = "0.3.0-dev";
 const BACKEND_EDITION: "ce" = "ce";
+
+// CE owns the HTTP registration boundary so it can accept an OpHub without a
+// service payload while still reusing reportedServiceSchema for embedded agents.
+const v03RegisterAgentRequestSchema = z.object({
+  registrationToken: z.string().startsWith("opstage_reg_"),
+  agent: z.object({
+    code: z.string().min(1),
+    name: z.string().optional(),
+    mode: z.enum(["embedded", "ophub"]).default("embedded"),
+    runtime: z.string().optional(),
+  }),
+  service: reportedServiceSchema.optional(),
+});
 
 export interface BuildAppOptions {
   logger?: boolean;
@@ -328,6 +341,11 @@ function publicAgent(row: AgentRow) {
     createdAt: row.createdAt,
     updatedAt: row.updatedAt
   };
+}
+
+function publicAgentWithServiceCount(db: Db, row: AgentRow) {
+  const serviceCount = (db.prepare("select count(*) as count from capsule_services where agentId = ?").get(row.id) as { count: number }).count;
+  return { ...publicAgent(row), serviceCount };
 }
 
 function publicCapsuleService(row: CapsuleServiceRow, effectiveStatus: string = row.status) {
@@ -1516,7 +1534,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     const where = clauses.join(" and ");
     const rows = db.prepare(`select * from agents where ${where} order by createdAt desc limit ? offset ?`).all(...values, pageSize, offset) as AgentRow[];
     const total = db.prepare(`select count(*) as count from agents where ${where}`).get(...values) as { count: number };
-    return { success: true, data: rows.map(publicAgent), pagination: { page, pageSize, total: total.count } };
+    return { success: true, data: rows.map(row => publicAgentWithServiceCount(db, row)), pagination: { page, pageSize, total: total.count } };
   });
 
 
@@ -1569,7 +1587,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     const row = db.prepare("select * from agents where id = ? and workspaceId = ?").get(agentId, DEFAULT_WORKSPACE.id) as AgentRow | undefined;
     if (!row) throw Object.assign(new Error("Agent not found."), { statusCode: 404, code: "AGENT_NOT_FOUND" });
     const services = db.prepare("select * from capsule_services where agentId = ? order by createdAt desc").all(agentId) as CapsuleServiceRow[];
-    return { success: true, data: { ...publicAgent(row), services: publicCapsuleServicesWithFreshness(db, services, config) } };
+    return { success: true, data: { ...publicAgentWithServiceCount(db, row), services: publicCapsuleServicesWithFreshness(db, services, config) } };
   });
 
   app.get("/api/admin/capsule-services", async (req) => {
@@ -1611,7 +1629,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
   });
 
   app.post("/api/agents/register", async (req) => {
-    const body = registerAgentRequestSchema.parse(req.body);
+    const body = v03RegisterAgentRequestSchema.parse(req.body);
     const tokenHash = hashToken(body.registrationToken);
     const registrationToken = db.prepare("select * from registration_tokens where tokenHash = ?").get(tokenHash) as RegistrationTokenRow | undefined;
     if (!registrationToken || registrationToken.status !== "ACTIVE" || registrationToken.revokedAt || (registrationToken.expiresAt && registrationToken.expiresAt < now())) {

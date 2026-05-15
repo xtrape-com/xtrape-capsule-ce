@@ -1,9 +1,9 @@
-import { Button, Card, Descriptions, Drawer, Input, Popconfirm, Select, Space, Table, Typography, message } from "antd";
+import { Button, Card, Descriptions, Drawer, Input, Popconfirm, Select, Space, Table, Tag, Typography, message } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import React from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { apiFetch, apiList } from "../api.js";
-import { StatusTag } from "../components.js";
+import { ShortIdText, StatusTag } from "../components.js";
 import { useI18n } from "../i18n.js";
 import { queryString, sameFilters, searchFilters, useQueryData } from "../lib/list-helpers.js";
 import { defaultPage, type Agent, type PageState } from "../lib/types.js";
@@ -105,10 +105,20 @@ export function AgentsPage() {
         }}
         onRow={(row) => ({ onClick: () => void openAgent(row.id) })}
         columns={[
-          { title: t("common.id"), dataIndex: "id", render: (v) => <Typography.Text code copyable>{String(v)}</Typography.Text> },
+          { title: t("common.id"), dataIndex: "id", render: (v) => <ShortIdText value={String(v)} /> },
           { title: t("common.code"), dataIndex: "code" },
           { title: t("common.name"), dataIndex: "name" },
-          { title: t("common.mode"), dataIndex: "mode" },
+          {
+            title: t("common.mode"),
+            dataIndex: "mode",
+            render: (value) => (
+              <Space>
+                <Typography.Text>{String(value)}</Typography.Text>
+                {value === "ophub" && <Tag color="blue">experimental</Tag>}
+              </Space>
+            ),
+          },
+          { title: t("agent.serviceCount"), dataIndex: "serviceCount" },
           { title: t("common.runtime"), dataIndex: "runtime" },
           { title: t("common.status"), dataIndex: "status", render: (v) => <StatusTag value={v} /> },
           { title: "Heartbeat", dataIndex: "lastHeartbeatAt" },
@@ -195,7 +205,7 @@ export function AgentsPage() {
                   .map(([key, value]) => ({
                     key,
                     label: key,
-                    children: key === "id" ? <Typography.Text code copyable>{String(value ?? "-")}</Typography.Text> : String(value ?? "-"),
+                    children: key === "id" ? <ShortIdText value={String(value ?? "")} /> : String(value ?? "-"),
                   }))
               : []
           }
@@ -210,6 +220,7 @@ export function AgentsPage() {
           columns={[
             { title: t("common.code"), dataIndex: "code" },
             { title: t("common.name"), dataIndex: "name" },
+            { title: t("common.status"), dataIndex: "status", render: (v) => <StatusTag value={v} /> },
             { title: t("common.health"), dataIndex: "healthStatus", render: (v) => <StatusTag value={v} /> },
           ]}
         />

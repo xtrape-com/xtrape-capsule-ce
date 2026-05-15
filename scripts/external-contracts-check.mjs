@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 
-const allowedExternalRange = /^(\^0\.1\.0-public-review\.\d+|\^0\.1\.0)$/;
+const allowedExternalRange = /^(\^0\.1\.0-public-review\.\d+|\^0\.[123]\.0)$/;
 
 function readJson(path) {
   return JSON.parse(readFileSync(path, "utf8"));
@@ -21,7 +21,7 @@ function assertExternalDependency({ file, section, name }) {
   }
 
   if (!allowedExternalRange.test(value)) {
-    console.error(`${file} must use ${name} range ^0.1.0-public-review.x or ^0.1.0; found ${value}.`);
+    console.error(`${file} must use ${name} range ^0.1.0-public-review.x, ^0.1.0, ^0.2.0, or ^0.3.0; found ${value}.`);
     process.exit(1);
   }
 }

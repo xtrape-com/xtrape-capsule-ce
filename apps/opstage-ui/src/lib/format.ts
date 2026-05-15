@@ -39,3 +39,18 @@ export function formatDurationMs(value: unknown): string {
   const hours = minutes / 60;
   return `${hours.toFixed(hours < 10 ? 1 : 0)}h`;
 }
+
+export function formatTimestampSeconds(value: unknown): string {
+  if (!value) return "-";
+  const date = new Date(String(value));
+  if (Number.isNaN(date.getTime())) return String(value);
+  const pad = (part: number) => String(part).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
+export function compactId(value: unknown): string {
+  const text = String(value ?? "");
+  if (!text) return "-";
+  if (text.length <= 16) return text;
+  return `${text.slice(0, 8)}...${text.slice(-6)}`;
+}

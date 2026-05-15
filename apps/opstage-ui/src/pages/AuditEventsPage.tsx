@@ -1,8 +1,8 @@
-import { Button, Card, Input, Select, Space, Table, Typography } from "antd";
+import { Button, Card, Input, Select, Space, Table } from "antd";
 import React from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { apiList } from "../api.js";
-import { StatusTag } from "../components.js";
+import { ShortIdText, StatusTag } from "../components.js";
 import { useI18n } from "../i18n.js";
 import { downloadBlob, queryString, sameFilters, searchFilters, useQueryData } from "../lib/list-helpers.js";
 import { defaultPage, type AuditEvent, type PageState } from "../lib/types.js";
@@ -158,7 +158,7 @@ export function AuditEventsPage() {
           {
             title: t("audit.targetId"),
             dataIndex: "targetId",
-            render: (v) => (v ? <Typography.Text code copyable>{String(v)}</Typography.Text> : "-"),
+            render: (v) => (v ? <ShortIdText value={String(v)} /> : "-"),
           },
           { title: t("common.result"), dataIndex: "result", render: (v) => <StatusTag value={String(v)} /> },
           { title: t("common.message"), dataIndex: "message" },

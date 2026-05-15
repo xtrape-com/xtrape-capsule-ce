@@ -2,6 +2,7 @@ import { Button, Card, Space, Statistic, Table, Typography } from "antd";
 import { apiFetch } from "../api.js";
 import { StatusTag } from "../components.js";
 import { useI18n } from "../i18n.js";
+import { formatTimestampSeconds } from "../lib/format.js";
 import { useQueryData } from "../lib/list-helpers.js";
 import type { DashboardSummary } from "../lib/types.js";
 
@@ -47,7 +48,7 @@ export function DashboardPage() {
           dataSource={data?.recentCommands ?? []}
           pagination={false}
           columns={[
-            { title: t("common.time"), dataIndex: "createdAt" },
+            { title: t("common.time"), dataIndex: "createdAt", render: formatTimestampSeconds },
             { title: "Action", dataIndex: "actionName" },
             { title: t("common.status"), dataIndex: "status", render: (v) => <StatusTag value={String(v)} /> },
           ]}

@@ -33,7 +33,7 @@ Opstage CE v0.1.0 is a lightweight, self-hosted governance control plane for Cap
 - SQLite runtime persistence via `better-sqlite3`.
 - Prisma schema retained and validated as the relational contract.
 - Zod-based contract schemas.
-- Node Agent SDK for embedded Capsule Service registration/reporting/command dispatch.
+- Node.js Embedded Agent SDK for embedded Capsule Service registration/reporting/command dispatch.
 
 ## Verification matrix
 

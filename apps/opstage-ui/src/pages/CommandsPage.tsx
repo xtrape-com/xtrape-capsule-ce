@@ -3,9 +3,9 @@ import type { ColumnsType } from "antd/es/table";
 import React from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { apiFetch, apiList } from "../api.js";
-import { JsonBlock, StatusTag } from "../components.js";
+import { JsonBlock, ShortIdText, StatusTag } from "../components.js";
 import { useI18n } from "../i18n.js";
-import { formatDurationMs } from "../lib/format.js";
+import { formatDurationMs, formatTimestampSeconds } from "../lib/format.js";
 import { queryString, sameFilters, searchFilters, useQueryData } from "../lib/list-helpers.js";
 import { defaultPage, type Command, type PageState } from "../lib/types.js";
 
@@ -135,14 +135,14 @@ export function CommandsPage() {
         }}
         onRow={(row) => ({ onClick: () => void openCommand(row.id) })}
         columns={[
-          { title: t("common.id"), dataIndex: "id", render: (v) => <Typography.Text code copyable>{String(v)}</Typography.Text> },
+          { title: t("common.id"), dataIndex: "id", render: (v) => <ShortIdText value={String(v)} /> },
           { title: t("command.type"), dataIndex: "type", render: (v) => <Tag>{String(v)}</Tag> },
           { title: "Action", dataIndex: "actionName" },
           { title: t("common.status"), dataIndex: "status", render: (v) => <StatusTag value={v} /> },
-          { title: t("command.agentId"), dataIndex: "agentId", render: (v) => <Typography.Text code copyable>{String(v)}</Typography.Text> },
-          { title: t("command.serviceId"), dataIndex: "serviceId", render: (v) => <Typography.Text code copyable>{String(v)}</Typography.Text> },
-          { title: t("common.createdAt"), dataIndex: "createdAt" },
-          { title: t("command.completedAt"), dataIndex: "completedAt" },
+          { title: t("command.agentId"), dataIndex: "agentId", render: (v) => <ShortIdText value={String(v)} /> },
+          { title: t("command.serviceId"), dataIndex: "serviceId", render: (v) => <ShortIdText value={String(v)} /> },
+          { title: t("common.createdAt"), dataIndex: "createdAt", render: formatTimestampSeconds },
+          { title: t("command.completedAt"), dataIndex: "completedAt", render: formatTimestampSeconds },
           { title: t("command.duration"), dataIndex: "durationMs", render: (v) => (typeof v === "number" ? formatDurationMs(v) : "-") },
           {
             title: t("command.errorCode"),
@@ -191,7 +191,7 @@ export function CommandsPage() {
       <Drawer
         open={!!selected}
         onClose={() => setSelected(null)}
-        title={selected?.id}
+        title={selected ? <ShortIdText value={selected.id} /> : undefined}
         width={860}
         extra={
           <Button disabled={!selected} onClick={() => selected && void openCommand(selected.id)}>
@@ -211,18 +211,18 @@ export function CommandsPage() {
                   {
                     key: "agentId",
                     label: t("command.agentId"),
-                    children: <Typography.Text code copyable>{selected.agentId}</Typography.Text>,
+                    children: <ShortIdText value={selected.agentId} />,
                   },
                   {
                     key: "serviceId",
                     label: t("command.serviceId"),
-                    children: <Typography.Text code copyable>{selected.serviceId}</Typography.Text>,
+                    children: <ShortIdText value={selected.serviceId} />,
                   },
                   { key: "errorCode", label: t("command.errorCode"), children: selected.errorCode ?? "-" },
                   { key: "errorMessage", label: t("command.errorMessage"), children: selected.errorMessage ?? "-" },
-                  { key: "createdAt", label: t("command.createdAt"), children: selected.createdAt },
-                  { key: "startedAt", label: t("command.startedAt"), children: selected.startedAt ?? "-" },
-                  { key: "completedAt", label: t("command.completedAt"), children: selected.completedAt ?? "-" },
+                  { key: "createdAt", label: t("command.createdAt"), children: formatTimestampSeconds(selected.createdAt) },
+                  { key: "startedAt", label: t("command.startedAt"), children: formatTimestampSeconds(selected.startedAt) },
+                  { key: "completedAt", label: t("command.completedAt"), children: formatTimestampSeconds(selected.completedAt) },
                   {
                     key: "duration",
                     label: t("command.duration"),

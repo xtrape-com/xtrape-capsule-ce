@@ -35,6 +35,7 @@ export interface Agent {
   mode: string;
   runtime?: string | null;
   status: string;
+  serviceCount?: number;
   lastHeartbeatAt?: string | null;
   createdAt: string;
   updatedAt: string;
