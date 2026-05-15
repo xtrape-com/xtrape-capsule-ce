@@ -21,6 +21,8 @@ import { resolveStaticFile, staticContentType } from "./static-ui.js";
 const BACKEND_FALLBACK_VERSION = "0.3.0-dev";
 const BACKEND_EDITION: "ce" = "ce";
 
+// CE owns the HTTP registration boundary so it can accept an OpHub without a
+// service payload while still reusing reportedServiceSchema for embedded agents.
 const v03RegisterAgentRequestSchema = z.object({
   registrationToken: z.string().startsWith("opstage_reg_"),
   agent: z.object({
