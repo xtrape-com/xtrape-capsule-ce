@@ -84,14 +84,21 @@ agent.action({
   })
 });
 
-await agent.start();
-console.log(`[demo-capsule-service] started. backendUrl=${backendUrl} tokenFile=${tokenFile} autoStartLoops=${autoStartLoops}`);
+async function main() {
+  await agent.start();
+  console.log(`[demo-capsule-service] started. backendUrl=${backendUrl} tokenFile=${tokenFile} autoStartLoops=${autoStartLoops}`);
 
-const shutdown = async () => {
-  console.log("[demo-capsule-service] stopping...");
-  await agent.stop();
-  process.exit(0);
-};
+  const shutdown = async () => {
+    console.log("[demo-capsule-service] stopping...");
+    await agent.stop();
+    process.exit(0);
+  };
 
-process.on("SIGINT", () => void shutdown());
-process.on("SIGTERM", () => void shutdown());
+  process.on("SIGINT", () => void shutdown());
+  process.on("SIGTERM", () => void shutdown());
+}
+
+void main().catch(error => {
+  console.error("[demo-capsule-service] failed to start", error);
+  process.exit(1);
+});
