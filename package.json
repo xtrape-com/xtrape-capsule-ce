@@ -1,37 +1,35 @@
 {
   "name": "xtrape-capsule-ce",
-  "version": "0.2.0",
+  "version": "0.3.0",
+  "description": "Xtrape Capsule Community Edition monorepo",
   "private": true,
-  "description": "Opstage CE — a lightweight, self-hosted, open-source control plane for Capsule Services.",
-  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "scripts": {
-    "dev": "pnpm --parallel --filter @xtrape/opstage-backend --filter @xtrape/opstage-ui dev",
-    "dev:backend": "pnpm --filter @xtrape/opstage-backend dev",
-    "dev:ui": "pnpm --filter @xtrape/opstage-ui dev",
-    "build": "pnpm -r build",
-    "test": "pnpm build && pnpm -r test",
-    "lint": "pnpm -r lint",
-    "typecheck": "pnpm -r typecheck",
-    "contracts:check": "node scripts/external-contracts-check.mjs && node scripts/opstage-contracts-check.mjs",
-    "db:validate": "pnpm --filter @xtrape/capsule-db db:validate",
-    "db:generate": "pnpm --filter @xtrape/capsule-db db:generate",
-    "smoke:demo": "pnpm build && node --import tsx scripts/smoke-demo.mjs",
-    "test:docker-smoke": "node scripts/docker-smoke.mjs",
-    "release:check": "pnpm contracts:check && pnpm db:validate && pnpm typecheck && pnpm build && pnpm test",
-    "release:notes": "node -e \"const fs=require('fs'); const v=fs.readFileSync('VERSION','utf8').trim(); const text=fs.readFileSync('CHANGELOG.md','utf8'); const start=text.indexOf('## ['+v+']'); const end=text.indexOf('\\n## [', start+1); console.log(text.slice(start, end>0?end:text.length).trim())\"",
-    "repo:check": "node scripts/repo-check.mjs",
-    "smoke:ui": "pnpm --filter @xtrape/opstage-ui build && pnpm --filter @xtrape/opstage-ui test",
-    "docker:build": "docker build -f deploy/docker/Dockerfile -t ghcr.io/xtrape-com/xtrape-capsule-ce:$(cat VERSION) ."
+    "build": "pnpm --filter opstage-backend build && pnpm --filter demo-capsule-service build",
+    "dev": "pnpm --filter opstage-backend dev",
+    "typecheck": "pnpm --filter opstage-backend typecheck && pnpm --filter demo-capsule-service typecheck",
+    "test": "pnpm --filter opstage-backend test",
+    "db:generate": "pnpm --filter opstage-backend db:generate",
+    "db:migrate": "pnpm --filter opstage-backend db:migrate",
+    "db:studio": "pnpm --filter opstage-backend db:studio",
+    "db:validate": "pnpm --filter opstage-backend db:validate"
+  },
+  "dependencies": {
+    "@xtrape/capsule-agent-node": "^0.3.0"
   },
   "devDependencies": {
-    "@types/node": "^22.10.2",
-    "@xtrape/capsule-agent-node": "^0.1.0-public-review.0",
     "tsx": "^4.19.2",
-    "typescript": "^5.6.3"
+    "tsup": "^8.3.5",
+    "typescript": "^5.6.3",
+    "@types/node": "^22.10.2",
+    "vitest": "^2.1.9"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=20",
+    "pnpm": ">=9"
   },
-  "packageManager": "pnpm@9.15.0",
-  "license": "Apache-2.0"
+  "packageManager": "pnpm@9.15.0"
 }

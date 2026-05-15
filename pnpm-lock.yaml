@@ -7,25 +7,10 @@ settings:
 importers:
 
   .:
-    devDependencies:
-      '@types/node':
-        specifier: ^22.10.2
-        version: 22.19.17
-      '@xtrape/capsule-agent-node':
-        specifier: ^0.1.0-public-review.0
-        version: 0.1.0-public-review.0
-      tsx:
-        specifier: ^4.19.2
-        version: 4.21.0
-      typescript:
-        specifier: ^5.6.3
-        version: 5.9.3
-
-  apps/demo-capsule-service:
     dependencies:
       '@xtrape/capsule-agent-node':
-        specifier: ^0.2.0
-        version: 0.2.0
+        specifier: ^0.3.0
+        version: 0.3.0
     devDependencies:
       '@types/node':
         specifier: ^22.10.2
@@ -33,6 +18,9 @@ importers:
       tsup:
         specifier: ^8.3.5
         version: 8.5.1(jiti@2.6.1)(postcss@8.5.13)(tsx@4.21.0)(typescript@5.9.3)(yaml@2.8.3)
+      tsx:
+        specifier: ^4.19.2
+        version: 4.21.0
       typescript:
         specifier: ^5.6.3
         version: 5.9.3
@@ -40,14 +28,33 @@ importers:
         specifier: ^2.1.9
         version: 2.1.9(@types/node@22.19.17)
 
+  apps/demo-capsule-service:
+    dependencies:
+      '@xtrape/capsule-agent-node':
+        specifier: ^0.3.0
+        version: 0.3.0
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.2
+        version: 22.19.17
+      tsup:
+        specifier: ^8.3.5
+        version: 8.5.1(jiti@2.6.1)(postcss@8.5.13)(tsx@4.21.0)(typescript@5.9.3)(yaml@2.8.3)
+      tsx:
+        specifier: ^4.19.2
+        version: 4.21.0
+      typescript:
+        specifier: ^5.6.3
+        version: 5.9.3
+
   apps/opstage-backend:
     dependencies:
       '@fastify/cookie':
         specifier: ^11.0.2
         version: 11.0.2
       '@xtrape/capsule-contracts-node':
-        specifier: ^0.2.0
-        version: 0.2.0
+        specifier: ^0.3.0
+        version: 0.3.0
       '@xtrape/capsule-db':
         specifier: workspace:*
         version: link:../../packages/db
@@ -1068,20 +1075,12 @@ packages:
   '@vitest/utils@2.1.9':
     resolution: {integrity: sha512-v0psaMSkNJ3A2NMrUEHFRzJtDPFn+/VWZ5WxImB21T9fjucJRmS7xCS3ppEnARb9y11OAzaD+P2Ps+b+BGX5iQ==}
 
-  '@xtrape/capsule-agent-node@0.1.0-public-review.0':
-    resolution: {integrity: sha512-12dBeegySgQ6BKQJagUjCYTlCJH8O/kP/pLPBsyrXOtU5NEf9hw9q/EBXdjY3WZVRMa7nuTLKdCXa+dQXsBijQ==}
+  '@xtrape/capsule-agent-node@0.3.0':
+    resolution: {integrity: sha512-BeBBpMTwvsKYEBhaiV7C0UCygIEog8tI9HCumxS+dB7EFmdzLurL1G3+wJTKLujPLi1axlNahtDsYiVsOMRYcg==}
     engines: {node: '>=20'}
 
-  '@xtrape/capsule-agent-node@0.2.0':
-    resolution: {integrity: sha512-di4Hl6RbhnGrMPXU877zW8nYAD2NxaKzGnSbd97OXxVmPN8aZXyjVCq8Z1xMuaD1E5ygaHeWoKoqtExCXYjDPA==}
-    engines: {node: '>=20'}
-
-  '@xtrape/capsule-contracts-node@0.1.0-public-review.0':
-    resolution: {integrity: sha512-DemjgReCEhqB2rIwTp19l8zvLwU5sPdZUEQXqdNplF7mhUMtDhhDz2VXVoyeP1vK0aVlQQEv8Yx1YXhZNQNHfg==}
-    engines: {node: '>=20'}
-
-  '@xtrape/capsule-contracts-node@0.2.0':
-    resolution: {integrity: sha512-RkoQVDh+9bh34GoLNUOKx1PtqYP/tv3fFGOo+1YGR77yf6irqRRShxG3B3DL/5GLxNWwM90Omgvl/WnKralO/Q==}
+  '@xtrape/capsule-contracts-node@0.3.0':
+    resolution: {integrity: sha512-AN6VhDuZNJDEdd4vuj2FzajlGgIY/5swmpH/M6DJAOYv5AyWvG9c2kjGPmbi/Oj4K7y7DI7m+++jJ50dDv1r/w==}
     engines: {node: '>=20'}
 
   abstract-logging@2.0.1:
@@ -1550,11 +1549,6 @@ packages:
   nanoid@3.3.12:
     resolution: {integrity: sha512-ZB9RH/39qpq5Vu6Y+NmUaFhQR6pp+M2Xt76XBnEwDaGcVAqhlvxrl3B2bKS5D3NH3QR76v3aSrKaF/Kiy7lEtQ==}
     engines: {node: ^10 || ^12 || ^13.7 || ^14 || >=15.0.1}
-    hasBin: true
-
-  nanoid@5.1.11:
-    resolution: {integrity: sha512-v+KEsUv2ps74PaSKv0gHTxTCgMXOIfBEbaqa6w6ISIGC7ZsvHN4N9oJ8d4cmf0n5oTzQz2SLmThbQWhjd/8eKg==}
-    engines: {node: ^18 || >=20}
     hasBin: true
 
   napi-build-utils@2.0.0:
@@ -3095,20 +3089,11 @@ snapshots:
       loupe: 3.2.1
       tinyrainbow: 1.2.0
 
-  '@xtrape/capsule-agent-node@0.1.0-public-review.0':
+  '@xtrape/capsule-agent-node@0.3.0':
     dependencies:
-      '@xtrape/capsule-contracts-node': 0.1.0-public-review.0
+      '@xtrape/capsule-contracts-node': 0.3.0
 
-  '@xtrape/capsule-agent-node@0.2.0':
-    dependencies:
-      '@xtrape/capsule-contracts-node': 0.2.0
-
-  '@xtrape/capsule-contracts-node@0.1.0-public-review.0':
-    dependencies:
-      nanoid: 5.1.11
-      zod: 3.25.76
-
-  '@xtrape/capsule-contracts-node@0.2.0':
+  '@xtrape/capsule-contracts-node@0.3.0':
     dependencies:
       zod: 3.25.76
 
@@ -3627,8 +3612,6 @@ snapshots:
       lru.min: 1.1.4
 
   nanoid@3.3.12: {}
-
-  nanoid@5.1.11: {}
 
   napi-build-utils@2.0.0: {}
 
