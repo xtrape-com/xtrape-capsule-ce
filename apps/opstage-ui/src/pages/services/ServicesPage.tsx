@@ -1,8 +1,8 @@
-import { Button, Card, Input, Select, Space, Table, Tag, Typography, message } from "antd";
+import { Button, Card, Input, Select, Space, Table, Tag, message } from "antd";
 import React from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { apiFetch, apiList } from "../../api.js";
-import { StatusTag } from "../../components.js";
+import { ShortIdText, StatusTag } from "../../components.js";
 import { useI18n } from "../../i18n.js";
 import { queryString, useQueryData } from "../../lib/list-helpers.js";
 import type { PageState, Service } from "../../lib/types.js";
@@ -118,11 +118,7 @@ export function ServicesPage() {
           {
             title: t("command.agentId"),
             dataIndex: "agentId",
-            render: (v) => (
-              <Typography.Text code copyable>
-                {String(v)}
-              </Typography.Text>
-            ),
+            render: (v) => <ShortIdText value={String(v)} />,
           },
           { title: t("common.version"), dataIndex: "version" },
           { title: t("common.status"), dataIndex: "status", render: (v) => <StatusTag value={v} /> },

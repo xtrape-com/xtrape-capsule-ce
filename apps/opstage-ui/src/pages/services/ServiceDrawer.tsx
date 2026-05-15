@@ -2,6 +2,7 @@ import { Alert, Button, Card, Collapse, Descriptions, Drawer, Input, Modal, Spac
 import React from "react";
 import { ApiError, apiFetch } from "../../api.js";
 import { JsonBlock, StatusTag } from "../../components.js";
+import { formatTimestampSeconds } from "../../lib/format.js";
 import { useI18n } from "../../i18n.js";
 import type { Action, ActionPrepare, Command, ResultDetailMeta, Service } from "../../lib/types.js";
 import { ActionDetailCard, ActionResultDetail, ActionResultList } from "./ActionResult.js";
@@ -388,8 +389,8 @@ export function ServiceDrawer({
                         column={1}
                         items={[
                           { key: "status", label: t("common.status"), children: <StatusTag value={commandResult.status} /> },
-                          { key: "createdAt", label: t("command.createdAt"), children: commandResult.createdAt },
-                          { key: "completedAt", label: t("command.completedAt"), children: commandResult.completedAt ?? "-" },
+                          { key: "createdAt", label: t("command.createdAt"), children: formatTimestampSeconds(commandResult.createdAt) },
+                          { key: "completedAt", label: t("command.completedAt"), children: formatTimestampSeconds(commandResult.completedAt) },
                         ]}
                       />
                     ),

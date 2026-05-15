@@ -263,6 +263,114 @@ describe("Phase 2 agent registration and service report", () => {
     await app.close();
   });
 
+  it("allows a Node Agent to register and report multiple Capsule Services", async () => {
+    const app = await buildApp({ logger: false, config });
+    const login = await app.inject({
+      method: "POST",
+      url: "/api/admin/auth/login",
+      payload: {
+        username: config.OPSTAGE_ADMIN_USERNAME,
+        password: config.OPSTAGE_ADMIN_PASSWORD
+      }
+    });
+    const cookie = login.cookies.find(item => item.name === "opstage_session")!;
+    const csrfToken = login.json().data.csrfToken as string;
+
+    const tokenRes = await app.inject({
+      method: "POST",
+      url: "/api/admin/registration-tokens",
+      cookies: { opstage_session: cookie.value },
+      headers: { "x-csrf-token": csrfToken },
+      payload: { name: "node agent token", expiresInSeconds: 3600 }
+    });
+    const registrationToken = tokenRes.json().data.token as string;
+
+    const registerRes = await app.inject({
+      method: "POST",
+      url: "/api/agents/register",
+      payload: {
+        registrationToken,
+        agent: {
+          code: "node-agent-a",
+          name: "Node Agent A",
+          mode: "embedded",
+          runtime: "nodejs"
+        }
+      }
+    });
+    expect(registerRes.statusCode).toBe(200);
+    const { agentId, agentToken } = registerRes.json().data as { agentId: string; agentToken: string };
+
+    const report = await app.inject({
+      method: "POST",
+      url: `/api/agents/${agentId}/services/report`,
+      headers: { authorization: `Bearer ${agentToken}` },
+      payload: {
+        services: [
+          {
+            code: "node-service-one",
+            name: "Node Service One",
+            version: "0.3.0",
+            runtime: "nodejs",
+            manifest: {
+              kind: "CapsuleService",
+              code: "node-service-one",
+              name: "Node Service One",
+              version: "0.3.0",
+              runtime: "nodejs",
+              agentMode: "embedded",
+              capabilities: [{ name: "inventory.read", label: "Inventory read" }]
+            },
+            health: { status: "UP" },
+            actions: [{ name: "refresh", label: "Refresh", dangerLevel: "LOW" }]
+          },
+          {
+            code: "node-service-two",
+            name: "Node Service Two",
+            version: "0.3.0",
+            runtime: "nodejs",
+            manifest: {
+              kind: "CapsuleService",
+              code: "node-service-two",
+              name: "Node Service Two",
+              version: "0.3.0",
+              runtime: "nodejs",
+              agentMode: "node",
+              events: [{ name: "node.service.synced", direction: "publish", designOnly: true }]
+            },
+            health: { status: "DEGRADED", message: "partial" }
+          }
+        ]
+      }
+    });
+    expect(report.statusCode).toBe(200);
+    expect(report.json().data.services).toHaveLength(2);
+
+    const agents = await app.inject({
+      method: "GET",
+      url: "/api/admin/agents?q=node-agent-a",
+      cookies: { opstage_session: cookie.value }
+    });
+    expect(agents.statusCode).toBe(200);
+    expect(agents.json().data[0]).toMatchObject({ code: "node-agent-a", mode: "embedded" });
+
+    const detail = await app.inject({
+      method: "GET",
+      url: `/api/admin/agents/${agentId}`,
+      cookies: { opstage_session: cookie.value }
+    });
+    expect(detail.statusCode).toBe(200);
+    expect(detail.json().data.services.map((service: { code: string }) => service.code).sort()).toEqual(["node-service-one", "node-service-two"]);
+
+    const services = await app.inject({
+      method: "GET",
+      url: `/api/admin/capsule-services?agentId=${agentId}`,
+      cookies: { opstage_session: cookie.value }
+    });
+    expect(services.statusCode).toBe(200);
+    expect(services.json().pagination.total).toBe(2);
+  });
+
   it("rejects revoked registration tokens and invalid agent tokens", async () => {
     const app = await buildApp({ logger: false, config });
     const login = await app.inject({
