@@ -3,7 +3,7 @@ import path from "node:path";
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import cookie from "@fastify/cookie";
 import { z } from "zod";
-import { adminLoginRequestSchema, agentHeartbeatRequestSchema, createActionCommandRequestSchema, createRegistrationTokenRequestSchema, createUserRequestSchema, registerAgentRequestSchema, reportedServiceSchema, reportCommandResultRequestSchema, resetUserPasswordRequestSchema, serviceReportRequestSchema, updateUserRequestSchema, type ReportedService } from "@xtrape/capsule-contracts-node";
+import { adminLoginRequestSchema, agentHeartbeatRequestSchema, createActionCommandRequestSchema, createRegistrationTokenRequestSchema, createUserRequestSchema, reportedServiceSchema, reportCommandResultRequestSchema, resetUserPasswordRequestSchema, serviceReportRequestSchema, updateUserRequestSchema, type ReportedService } from "@xtrape/capsule-contracts-node";
 import { DEFAULT_WORKSPACE, ensureDefaultWorkspace, openDatabase, type Db } from "@xtrape/capsule-db";
 import { createId, hashToken, newToken, redactAuditMetadata, redactSecrets, safeJsonStringify } from "@xtrape/capsule-shared";
 import { type AppConfig, loadConfig } from "./config.js";
@@ -1627,7 +1627,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
   });
 
   app.post("/api/agents/register", async (req) => {
-    const body = registerAgentRequestSchema.parse(req.body);
+    const body = v03RegisterAgentRequestSchema.parse(req.body);
     const tokenHash = hashToken(body.registrationToken);
     const registrationToken = db.prepare("select * from registration_tokens where tokenHash = ?").get(tokenHash) as RegistrationTokenRow | undefined;
     if (!registrationToken || registrationToken.status !== "ACTIVE" || registrationToken.revokedAt || (registrationToken.expiresAt && registrationToken.expiresAt < now())) {

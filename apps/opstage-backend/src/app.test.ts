@@ -263,7 +263,7 @@ describe("Phase 2 agent registration and service report", () => {
     await app.close();
   });
 
-  it("allows a Node Agent to register and report multiple Capsule Services", async () => {
+  it("allows an OpHub to register and report multiple Capsule Services", async () => {
     const app = await buildApp({ logger: false, config });
     const login = await app.inject({
       method: "POST",
@@ -281,7 +281,7 @@ describe("Phase 2 agent registration and service report", () => {
       url: "/api/admin/registration-tokens",
       cookies: { opstage_session: cookie.value },
       headers: { "x-csrf-token": csrfToken },
-      payload: { name: "node agent token", expiresInSeconds: 3600 }
+      payload: { name: "ophub token", expiresInSeconds: 3600 }
     });
     const registrationToken = tokenRes.json().data.token as string;
 
@@ -291,10 +291,10 @@ describe("Phase 2 agent registration and service report", () => {
       payload: {
         registrationToken,
         agent: {
-          code: "node-agent-a",
-          name: "Node Agent A",
-          mode: "embedded",
-          runtime: "nodejs"
+          code: "ophub-a",
+          name: "OpHub A",
+          mode: "ophub",
+          runtime: "go"
         }
       }
     });
@@ -308,35 +308,35 @@ describe("Phase 2 agent registration and service report", () => {
       payload: {
         services: [
           {
-            code: "node-service-one",
-            name: "Node Service One",
+            code: "ophub-service-one",
+            name: "OpHub Service One",
             version: "0.3.0",
             runtime: "nodejs",
             manifest: {
               kind: "CapsuleService",
-              code: "node-service-one",
-              name: "Node Service One",
+              code: "ophub-service-one",
+              name: "OpHub Service One",
               version: "0.3.0",
               runtime: "nodejs",
-              agentMode: "embedded",
+              agentMode: "ophub",
               capabilities: [{ name: "inventory.read", label: "Inventory read" }]
             },
             health: { status: "UP" },
             actions: [{ name: "refresh", label: "Refresh", dangerLevel: "LOW" }]
           },
           {
-            code: "node-service-two",
-            name: "Node Service Two",
+            code: "ophub-service-two",
+            name: "OpHub Service Two",
             version: "0.3.0",
             runtime: "nodejs",
             manifest: {
               kind: "CapsuleService",
-              code: "node-service-two",
-              name: "Node Service Two",
+              code: "ophub-service-two",
+              name: "OpHub Service Two",
               version: "0.3.0",
               runtime: "nodejs",
-              agentMode: "node",
-              events: [{ name: "node.service.synced", direction: "publish", designOnly: true }]
+              agentMode: "ophub",
+              events: [{ name: "ophub.service.synced", direction: "publish", designOnly: true }]
             },
             health: { status: "DEGRADED", message: "partial" }
           }
@@ -348,11 +348,11 @@ describe("Phase 2 agent registration and service report", () => {
 
     const agents = await app.inject({
       method: "GET",
-      url: "/api/admin/agents?q=node-agent-a",
+      url: "/api/admin/agents?q=ophub-a",
       cookies: { opstage_session: cookie.value }
     });
     expect(agents.statusCode).toBe(200);
-    expect(agents.json().data[0]).toMatchObject({ code: "node-agent-a", mode: "embedded" });
+    expect(agents.json().data[0]).toMatchObject({ code: "ophub-a", mode: "ophub" });
 
     const detail = await app.inject({
       method: "GET",
@@ -360,7 +360,7 @@ describe("Phase 2 agent registration and service report", () => {
       cookies: { opstage_session: cookie.value }
     });
     expect(detail.statusCode).toBe(200);
-    expect(detail.json().data.services.map((service: { code: string }) => service.code).sort()).toEqual(["node-service-one", "node-service-two"]);
+    expect(detail.json().data.services.map((service: { code: string }) => service.code).sort()).toEqual(["ophub-service-one", "ophub-service-two"]);
 
     const services = await app.inject({
       method: "GET",

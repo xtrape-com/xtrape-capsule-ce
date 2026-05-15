@@ -114,7 +114,7 @@ export function AgentsPage() {
             render: (value) => (
               <Space>
                 <Typography.Text>{String(value)}</Typography.Text>
-                {value === "node" && <Tag color="blue">experimental</Tag>}
+                {value === "ophub" && <Tag color="blue">experimental</Tag>}
               </Space>
             ),
           },
