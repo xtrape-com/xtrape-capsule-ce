@@ -6,6 +6,7 @@ import { useI18n } from "./i18n.js";
 import { AgentsPage } from "./pages/AgentsPage.js";
 import { AuditEventsPage } from "./pages/AuditEventsPage.js";
 import { CommandsPage } from "./pages/CommandsPage.js";
+import { BusPage } from "./pages/BusPage.js";
 import { DashboardPage } from "./pages/DashboardPage.js";
 import { LanguageSwitcher } from "./pages/LanguageSwitcher.js";
 import { LoginPage } from "./pages/LoginPage.js";
@@ -36,6 +37,7 @@ function Shell({ session, onLogout }: { session: SessionData; onLogout: () => vo
     ["/agents", t("menu.agents")],
     ["/services", t("menu.services")],
     ["/commands", t("menu.commands")],
+    ["/bus", t("menu.bus")],
     ["/audit-events", t("menu.auditEvents")],
     ["/settings", t("menu.settings")],
   ];
@@ -78,6 +80,7 @@ function Shell({ session, onLogout }: { session: SessionData; onLogout: () => vo
             <Route path="/agents" element={<AgentsPage />} />
             <Route path="/services" element={<ServicesPage />} />
             <Route path="/commands" element={<CommandsPage />} />
+            <Route path="/bus" element={<BusPage />} />
             <Route path="/audit-events" element={<AuditEventsPage />} />
             <Route path="/settings" element={<SettingsPage />} />
           </Routes>

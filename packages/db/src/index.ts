@@ -264,6 +264,47 @@ export function migrateDatabase(db: Db): void {
     create index if not exists idx_commands_agent_status on commands(agentId, status);
     create index if not exists idx_commands_service_created on commands(serviceId, createdAt);
     create index if not exists idx_command_results_agent_reported on command_results(agentId, reportedAt);
+
+    create table if not exists bus_events (
+      id text primary key,
+      workspaceId text not null,
+      agentId text not null,
+      serviceId text,
+      serviceCode text not null,
+      eventType text not null,
+      payloadJson text,
+      metadataJson text,
+      correlationId text,
+      causationId text,
+      occurredAt text not null,
+      acceptedAt text not null,
+      routeCount integer not null default 0,
+      foreign key(workspaceId) references workspaces(id),
+      foreign key(agentId) references agents(id),
+      foreign key(serviceId) references capsule_services(id)
+    );
+
+    create table if not exists bus_routes (
+      id text primary key,
+      workspaceId text not null,
+      name text not null,
+      description text,
+      status text not null default 'DISABLED',
+      sourceServiceCode text,
+      eventType text not null,
+      targetServiceCode text not null,
+      actionName text not null,
+      inputMappingJson text,
+      maxCommandsPerEvent integer not null default 1,
+      metadataJson text,
+      createdAt text not null,
+      updatedAt text not null,
+      foreign key(workspaceId) references workspaces(id)
+    );
+
+    create index if not exists idx_bus_events_workspace_accepted on bus_events(workspaceId, acceptedAt);
+    create index if not exists idx_bus_events_type_source on bus_events(eventType, serviceCode);
+    create index if not exists idx_bus_routes_match on bus_routes(workspaceId, status, eventType, sourceServiceCode);
   `);
 }
 

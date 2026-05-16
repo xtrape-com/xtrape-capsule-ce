@@ -7,10 +7,6 @@ settings:
 importers:
 
   .:
-    dependencies:
-      '@xtrape/capsule-agent-node':
-        specifier: ^0.3.0
-        version: 0.3.0
     devDependencies:
       '@types/node':
         specifier: ^22.10.2
@@ -31,8 +27,8 @@ importers:
   apps/demo-capsule-service:
     dependencies:
       '@xtrape/capsule-agent-node':
-        specifier: ^0.3.0
-        version: 0.3.0
+        specifier: file:../../../xtrape-capsule-agent-node
+        version: file:../xtrape-capsule-agent-node
     devDependencies:
       '@types/node':
         specifier: ^22.10.2
@@ -53,8 +49,8 @@ importers:
         specifier: ^11.0.2
         version: 11.0.2
       '@xtrape/capsule-contracts-node':
-        specifier: ^0.3.0
-        version: 0.3.0
+        specifier: file:../../../xtrape-capsule-contracts-node
+        version: file:../xtrape-capsule-contracts-node
       '@xtrape/capsule-db':
         specifier: workspace:*
         version: link:../../packages/db
@@ -1075,12 +1071,12 @@ packages:
   '@vitest/utils@2.1.9':
     resolution: {integrity: sha512-v0psaMSkNJ3A2NMrUEHFRzJtDPFn+/VWZ5WxImB21T9fjucJRmS7xCS3ppEnARb9y11OAzaD+P2Ps+b+BGX5iQ==}
 
-  '@xtrape/capsule-agent-node@0.3.0':
-    resolution: {integrity: sha512-BeBBpMTwvsKYEBhaiV7C0UCygIEog8tI9HCumxS+dB7EFmdzLurL1G3+wJTKLujPLi1axlNahtDsYiVsOMRYcg==}
+  '@xtrape/capsule-agent-node@file:../xtrape-capsule-agent-node':
+    resolution: {directory: ../xtrape-capsule-agent-node, type: directory}
     engines: {node: '>=20'}
 
-  '@xtrape/capsule-contracts-node@0.3.0':
-    resolution: {integrity: sha512-AN6VhDuZNJDEdd4vuj2FzajlGgIY/5swmpH/M6DJAOYv5AyWvG9c2kjGPmbi/Oj4K7y7DI7m+++jJ50dDv1r/w==}
+  '@xtrape/capsule-contracts-node@file:../xtrape-capsule-contracts-node':
+    resolution: {directory: ../xtrape-capsule-contracts-node, type: directory}
     engines: {node: '>=20'}
 
   abstract-logging@2.0.1:
@@ -3089,11 +3085,11 @@ snapshots:
       loupe: 3.2.1
       tinyrainbow: 1.2.0
 
-  '@xtrape/capsule-agent-node@0.3.0':
+  '@xtrape/capsule-agent-node@file:../xtrape-capsule-agent-node':
     dependencies:
-      '@xtrape/capsule-contracts-node': 0.3.0
+      '@xtrape/capsule-contracts-node': file:../xtrape-capsule-contracts-node
 
-  '@xtrape/capsule-contracts-node@0.3.0':
+  '@xtrape/capsule-contracts-node@file:../xtrape-capsule-contracts-node':
     dependencies:
       zod: 3.25.76
 

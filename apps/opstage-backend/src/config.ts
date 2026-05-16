@@ -1,5 +1,11 @@
 import { z } from "zod";
 
+const booleanFromEnv = z.preprocess((value) => {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") return ["1", "true", "yes", "on"].includes(value.trim().toLowerCase());
+  return value;
+}, z.boolean());
+
 const envSchema = z.object({
   OPSTAGE_HOST: z.string().default("0.0.0.0"),
   OPSTAGE_PORT: z.coerce.number().int().positive().default(8080),
@@ -16,6 +22,7 @@ const envSchema = z.object({
   OPSTAGE_MAINTENANCE_INTERVAL_SECONDS: z.coerce.number().int().min(0).default(60),
   OPSTAGE_BACKUP_DIR: z.string().default("./data/backups"),
   OPSTAGE_COMMAND_RESULT_MAX_BYTES: z.coerce.number().int().positive().default(1_000_000),
+  OPSTAGE_CAPSULE_BUS_ENABLED: booleanFromEnv.default(false),
   NODE_ENV: z.string().optional(),
   // Image / build metadata. Populated at container build time by the
   // docker-publish workflow via --build-arg; harmless if unset locally.

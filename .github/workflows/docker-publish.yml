@@ -2,10 +2,6 @@ name: Publish Docker Image
 
 # Docker tag strategy (kept in sync with docs/opstage-ce/docker-deployment
 # on xtrape-capsule-site):
-#   - On push to `main`:
-#       ghcr.io/.../xtrape-capsule-ce:edge        — rolling main build
-#       ghcr.io/.../xtrape-capsule-ce:main        — branch ref alias
-#       ghcr.io/.../xtrape-capsule-ce:sha-<long>  — exact-commit pinning
 #   - On `v*` git tags:
 #       ghcr.io/.../xtrape-capsule-ce:<semver>    — e.g. 0.2.0
 #       ghcr.io/.../xtrape-capsule-ce:<major>.<minor>  — e.g. 0.2
@@ -17,7 +13,6 @@ name: Publish Docker Image
 
 on:
   push:
-    branches: [main]
     tags: ['v*']
   workflow_dispatch:
 
@@ -55,8 +50,6 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=edge,branch=main
-            type=ref,event=branch
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=sha,format=long,prefix=sha-
