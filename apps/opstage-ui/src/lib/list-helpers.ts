@@ -1,6 +1,6 @@
 import React from "react";
 import { useQuery } from "@tanstack/react-query";
-import { apiDownload } from "../api.js";
+import { apiDownload, ApiError } from "../api.js";
 
 /**
  * Render the supplied params as a `?key=value&...` query string,
@@ -45,7 +45,7 @@ export function useQueryData<T>(
   loader: () => Promise<T>,
   deps: React.DependencyList = [],
   refreshMs?: number,
-): { data: T | null; loading: boolean; error: string | null; reload: () => Promise<void> } {
+): { data: T | null; loading: boolean; error: string | null; errorCode: string | null; reload: () => Promise<void> } {
   const queryId = React.useId();
   const query = useQuery({
     queryKey: [queryId, ...deps],
@@ -57,6 +57,7 @@ export function useQueryData<T>(
     data: query.data ?? null,
     loading: query.isLoading || query.isFetching,
     error: query.error instanceof Error ? query.error.message : query.error ? String(query.error) : null,
+    errorCode: query.error instanceof ApiError ? query.error.code : null,
     reload: async () => {
       await query.refetch();
     },

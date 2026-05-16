@@ -1,6 +1,6 @@
 {
   "name": "demo-capsule-service",
-  "version": "0.3.0",
+  "version": "0.4.0-rc.0",
   "description": "Demo Capsule Service for Opstage CE",
   "private": true,
   "type": "module",
@@ -10,7 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@xtrape/capsule-agent-node": "^0.3.0"
+    "@xtrape/capsule-agent-node": "file:../../../xtrape-capsule-agent-node"
   },
   "devDependencies": {
     "tsx": "^4.19.2",

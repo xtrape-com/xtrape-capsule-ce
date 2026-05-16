@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 
 export * from "./tokens.js";
 
-export type CompactIdPrefix = "usr" | "wks" | "agt" | "tok" | "svc" | "hlr" | "cfg" | "act" | "cmd" | "crs" | "aud" | "set";
+export type CompactIdPrefix = "usr" | "wks" | "agt" | "tok" | "svc" | "hlr" | "cfg" | "act" | "cmd" | "crs" | "aud" | "bev" | "brt" | "set";
 
 export function createId(prefix: CompactIdPrefix): string {
   return `${prefix}_${randomBytes(12).toString("base64url")}`;
