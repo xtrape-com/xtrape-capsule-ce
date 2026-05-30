@@ -175,7 +175,6 @@ interface BusRouteRow {
   targetServiceCode: string;
   actionName: string;
   inputMappingJson: string | null;
-  maxCommandsPerEvent: number;
   metadataJson: string | null;
   createdAt: string;
   updatedAt: string;
@@ -632,7 +631,6 @@ function publicBusRoute(row: BusRouteRow) {
     match: { eventType: row.eventType, sourceServiceCode: row.sourceServiceCode ?? undefined },
     target: { serviceCode: row.targetServiceCode, actionName: row.actionName },
     inputMapping: jsonParse(row.inputMappingJson),
-    maxCommandsPerEvent: row.maxCommandsPerEvent,
     metadata: jsonParse(row.metadataJson),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
@@ -657,6 +655,20 @@ function dispatchBusEvent(db: Db, config: AppConfig, input: { agent: AgentRow; b
   if (service.agentId !== input.agent.id) {
     throw Object.assign(new Error("Bus event source service is not owned by this agent."), { statusCode: 403, code: "BUS_SOURCE_SERVICE_FORBIDDEN" });
   }
+
+  const oneMinuteAgo = new Date(Date.now() - 60_000).toISOString();
+  const recentCount = (db.prepare("select count(*) as count from bus_events where agentId = ? and acceptedAt > ?").get(input.agent.id, oneMinuteAgo) as { count: number }).count;
+  if (recentCount >= config.OPSTAGE_CAPSULE_BUS_INGEST_PER_MIN) {
+    throw Object.assign(new Error(`Bus rate limit exceeded: ${config.OPSTAGE_CAPSULE_BUS_INGEST_PER_MIN} events/min per agent.`), { statusCode: 429, code: "BUS_RATE_LIMITED" });
+  }
+
+  if (input.body.causationId) {
+    const causationEvent = db.prepare("select causationId from bus_events where id = ? and workspaceId = ?").get(input.body.causationId, DEFAULT_WORKSPACE.id) as { causationId: string | null } | undefined;
+    if (causationEvent?.causationId) {
+      throw Object.assign(new Error("Bus event depth exceeded: max depth is 1. Router-caused re-entry is not allowed."), { statusCode: 422, code: "BUS_DEPTH_EXCEEDED" });
+    }
+  }
+
   const eventId = createId("bev");
   const occurredAt = input.body.occurredAt ?? ts;
   const payload = redactSecrets(input.body.payload ?? {});
@@ -1858,12 +1870,12 @@ export async function buildApp(options: BuildAppOptions = {}) {
     db.prepare(`
       update bus_routes set
         name = ?, description = ?, status = ?, sourceServiceCode = ?, eventType = ?,
-        targetServiceCode = ?, actionName = ?, inputMappingJson = ?, maxCommandsPerEvent = ?,
+        targetServiceCode = ?, actionName = ?, inputMappingJson = ?,
         metadataJson = ?, updatedAt = ?
       where id = ? and workspaceId = ?
     `).run(
       body.name, body.description ?? null, body.status, body.match.sourceServiceCode ?? null, body.match.eventType,
-      body.target.serviceCode, body.target.actionName, safeJsonStringify(body.inputMapping ?? {}), body.maxCommandsPerEvent,
+      body.target.serviceCode, body.target.actionName, safeJsonStringify(body.inputMapping ?? {}),
       safeJsonStringify(body.metadata ?? {}), ts, routeId, DEFAULT_WORKSPACE.id
     );
     const row = db.prepare("select * from bus_routes where id = ?").get(routeId) as BusRouteRow;
@@ -1893,11 +1905,11 @@ export async function buildApp(options: BuildAppOptions = {}) {
     db.prepare(`
       insert into bus_routes (
         id, workspaceId, name, description, status, sourceServiceCode, eventType, targetServiceCode,
-        actionName, inputMappingJson, maxCommandsPerEvent, metadataJson, createdAt, updatedAt
-      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        actionName, inputMappingJson, metadataJson, createdAt, updatedAt
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       routeId, DEFAULT_WORKSPACE.id, body.name, body.description ?? null, body.status, body.match.sourceServiceCode ?? null, body.match.eventType,
-      body.target.serviceCode, body.target.actionName, safeJsonStringify(body.inputMapping ?? {}), body.maxCommandsPerEvent, safeJsonStringify(body.metadata ?? {}), ts, ts
+      body.target.serviceCode, body.target.actionName, safeJsonStringify(body.inputMapping ?? {}), safeJsonStringify(body.metadata ?? {}), ts, ts
     );
     const row = db.prepare("select * from bus_routes where id = ?").get(routeId) as BusRouteRow;
     writeAudit(db, { actorType: "USER", actorId: user.id, action: "bus.route.created", targetType: "BusRoute", targetId: routeId, metadata: { eventType: body.match.eventType, targetServiceCode: body.target.serviceCode, actionName: body.target.actionName, status: body.status } });

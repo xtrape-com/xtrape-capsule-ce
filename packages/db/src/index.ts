@@ -295,7 +295,6 @@ export function migrateDatabase(db: Db): void {
       targetServiceCode text not null,
       actionName text not null,
       inputMappingJson text,
-      maxCommandsPerEvent integer not null default 1,
       metadataJson text,
       createdAt text not null,
       updatedAt text not null,

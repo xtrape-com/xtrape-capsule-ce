@@ -240,7 +240,6 @@ export interface BusRoute {
   match: { eventType: string; sourceServiceCode?: string };
   target: { serviceCode: string; actionName: string };
   inputMapping?: Record<string, unknown>;
-  maxCommandsPerEvent?: number;
   metadata?: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;

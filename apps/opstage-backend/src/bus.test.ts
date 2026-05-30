@@ -111,4 +111,54 @@ describe("v0.4 experimental Capsule Bus", () => {
     expect(audit.json().data.map((row: { action: string }) => row.action)).toContain("bus.command.created");
     await app.close();
   });
+
+  it("rejects events exceeding the per-agent rate limit", async () => {
+    const app = await buildApp({ logger: false, config: { ...config, OPSTAGE_CAPSULE_BUS_INGEST_PER_MIN: 2 } });
+    const admin = await login(app);
+    const tokenRes = await app.inject({ method: "POST", url: "/api/admin/registration-tokens", cookies: { opstage_session: admin.cookie }, headers: { "x-csrf-token": admin.csrfToken }, payload: { name: "rate token" } });
+    const registrationToken = tokenRes.json().data.token as string;
+    const registerRes = await app.inject({
+      method: "POST", url: "/api/agents/register",
+      payload: {
+        registrationToken,
+        agent: { code: "rate-agent", name: "Rate Agent", mode: "embedded", runtime: "nodejs" },
+        service: { code: "rate-svc", name: "Rate Svc", version: "0.4.0", runtime: "nodejs", manifest: { kind: "CapsuleService", code: "rate-svc" }, health: { status: "UP" }, actions: [{ name: "noop", label: "Noop", dangerLevel: "LOW" }] },
+      },
+    });
+    const { agentId, agentToken } = registerRes.json().data as { agentId: string; agentToken: string };
+    for (let i = 0; i < 2; i++) {
+      const res = await app.inject({ method: "POST", url: `/api/agents/${agentId}/bus/events`, headers: { authorization: `Bearer ${agentToken}` }, payload: { eventType: "rate.test", sourceServiceCode: "rate-svc", payload: {} } });
+      expect(res.statusCode).toBe(200);
+    }
+    const limited = await app.inject({ method: "POST", url: `/api/agents/${agentId}/bus/events`, headers: { authorization: `Bearer ${agentToken}` }, payload: { eventType: "rate.test", sourceServiceCode: "rate-svc", payload: {} } });
+    expect(limited.statusCode).toBe(429);
+    expect(limited.json().error.code).toBe("BUS_RATE_LIMITED");
+    await app.close();
+  });
+
+  it("rejects events that would exceed max depth", async () => {
+    const app = await buildApp({ logger: false, config });
+    const admin = await login(app);
+    const tokenRes = await app.inject({ method: "POST", url: "/api/admin/registration-tokens", cookies: { opstage_session: admin.cookie }, headers: { "x-csrf-token": admin.csrfToken }, payload: { name: "depth token" } });
+    const registrationToken = tokenRes.json().data.token as string;
+    const registerRes = await app.inject({
+      method: "POST", url: "/api/agents/register",
+      payload: {
+        registrationToken,
+        agent: { code: "depth-agent", name: "Depth Agent", mode: "embedded", runtime: "nodejs" },
+        service: { code: "depth-svc", name: "Depth Svc", version: "0.4.0", runtime: "nodejs", manifest: { kind: "CapsuleService", code: "depth-svc" }, health: { status: "UP" }, actions: [{ name: "echo", label: "Echo", dangerLevel: "LOW" }] },
+      },
+    });
+    const { agentId, agentToken } = registerRes.json().data as { agentId: string; agentToken: string };
+    const first = await app.inject({ method: "POST", url: `/api/agents/${agentId}/bus/events`, headers: { authorization: `Bearer ${agentToken}` }, payload: { eventType: "depth.test", sourceServiceCode: "depth-svc", payload: {} } });
+    expect(first.statusCode).toBe(200);
+    const firstEventId = first.json().data.eventId as string;
+    const second = await app.inject({ method: "POST", url: `/api/agents/${agentId}/bus/events`, headers: { authorization: `Bearer ${agentToken}` }, payload: { eventType: "depth.chain", sourceServiceCode: "depth-svc", causationId: firstEventId, payload: {} } });
+    expect(second.statusCode).toBe(200);
+    const secondEventId = second.json().data.eventId as string;
+    const third = await app.inject({ method: "POST", url: `/api/agents/${agentId}/bus/events`, headers: { authorization: `Bearer ${agentToken}` }, payload: { eventType: "depth.chain2", sourceServiceCode: "depth-svc", causationId: secondEventId, payload: {} } });
+    expect(third.statusCode).toBe(422);
+    expect(third.json().error.code).toBe("BUS_DEPTH_EXCEEDED");
+    await app.close();
+  });
 });

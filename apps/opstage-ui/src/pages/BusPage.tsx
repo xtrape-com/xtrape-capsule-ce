@@ -16,7 +16,6 @@ type RouteFormValues = {
   sourceServiceCode?: string;
   targetServiceCode: string;
   actionName: string;
-  maxCommandsPerEvent?: number;
 };
 
 function routePayload(values: RouteFormValues) {
@@ -26,7 +25,6 @@ function routePayload(values: RouteFormValues) {
     status: values.status ?? "DISABLED",
     match: { eventType: values.eventType, sourceServiceCode: values.sourceServiceCode || undefined },
     target: { serviceCode: values.targetServiceCode, actionName: values.actionName },
-    maxCommandsPerEvent: values.maxCommandsPerEvent ?? 1,
   };
 }
 
@@ -40,9 +38,8 @@ function routeInitialValues(route?: BusRoute | null): Partial<RouteFormValues> {
         sourceServiceCode: route.match?.sourceServiceCode,
         targetServiceCode: route.target?.serviceCode,
         actionName: route.target?.actionName,
-        maxCommandsPerEvent: route.maxCommandsPerEvent ?? 1,
       }
-    : { status: "DISABLED", maxCommandsPerEvent: 1 };
+    : { status: "DISABLED" };
 }
 
 export function BusPage() {
@@ -202,7 +199,6 @@ export function BusPage() {
           <Form.Item name="sourceServiceCode" label={t("bus.sourceService")}><Input placeholder="demo-worker" /></Form.Item>
           <Form.Item name="targetServiceCode" label={t("bus.targetService")} rules={[{ required: true, message: t("form.required") }]}><Input placeholder="demo-worker" /></Form.Item>
           <Form.Item name="actionName" label={t("bus.actionName")} rules={[{ required: true, message: t("form.required") }]}><Input placeholder="notify" /></Form.Item>
-          <Form.Item name="maxCommandsPerEvent" label={t("bus.maxCommandsPerEvent")}><InputNumber min={1} max={10} /></Form.Item>
         </Form>
       </Modal>
     </Card>
