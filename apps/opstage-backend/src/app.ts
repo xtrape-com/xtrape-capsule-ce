@@ -730,9 +730,9 @@ function dispatchBusEvent(db: Db, config: AppConfig, input: { agent: AgentRow; b
       writeAudit(db, { actorType: "SYSTEM", action: "bus.route.failed", targetType: "BusRoute", targetId: route.id, result: "FAILURE", metadata: { eventId, reason: (error as { code?: string }).code ?? "BUS_TARGET_UNAVAILABLE" } });
       continue;
     }
+    writeAudit(db, { actorType: "SYSTEM", action: "bus.route.matched", targetType: "BusRoute", targetId: route.id, metadata: { eventId, dryRun } });
     if (dryRun) {
       routedCommands.push({ routeId: route.id, dryRun: true, targetServiceCode: route.targetServiceCode, actionName: route.actionName, status: "DRY_RUN" });
-      writeAudit(db, { actorType: "SYSTEM", action: "bus.route.matched", targetType: "BusRoute", targetId: route.id, metadata: { eventId, dryRun: true } });
       continue;
     }
     const commandId = createId("cmd");

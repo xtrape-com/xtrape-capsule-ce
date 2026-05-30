@@ -108,7 +108,9 @@ describe("v0.4 experimental Capsule Bus", () => {
     expect(events.json().data[0].payload.password).toBe("[REDACTED]");
     const audit = await app.inject({ method: "GET", url: "/api/admin/bus/audit", cookies: { opstage_session: admin.cookie } });
     expect(audit.statusCode).toBe(200);
-    expect(audit.json().data.map((row: { action: string }) => row.action)).toContain("bus.command.created");
+    const auditActions = audit.json().data.map((row: { action: string }) => row.action);
+    expect(auditActions).toContain("bus.route.matched");
+    expect(auditActions).toContain("bus.command.created");
     await app.close();
   });
 
