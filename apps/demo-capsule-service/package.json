@@ -10,7 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@xtrape/capsule-agent-node": "file:../../../xtrape-capsule-agent-node"
+    "@xtrape/capsule-agent-node": "^0.4.0"
   },
   "devDependencies": {
     "tsx": "^4.19.2",
