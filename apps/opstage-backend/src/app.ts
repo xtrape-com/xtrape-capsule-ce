@@ -716,6 +716,7 @@ function dispatchBusEvent(db: Db, config: AppConfig, input: { agent: AgentRow; b
   const routedCommands = [];
   for (const route of routes) {
     const dryRun = route.status === "DRY_RUN" || input.body.routePolicy?.dryRun === true;
+    writeAudit(db, { actorType: "SYSTEM", action: "bus.route.matched", targetType: "BusRoute", targetId: route.id, metadata: { eventId, dryRun } });
     const target = db.prepare("select * from capsule_services where workspaceId = ? and code = ?").get(DEFAULT_WORKSPACE.id, route.targetServiceCode) as CapsuleServiceRow | undefined;
     const action = target ? db.prepare("select * from action_definitions where serviceId = ? and name = ? and enabled = 1").get(target.id, route.actionName) as ActionDefinitionRow | undefined : undefined;
     if (!target || !action) {
@@ -730,7 +731,6 @@ function dispatchBusEvent(db: Db, config: AppConfig, input: { agent: AgentRow; b
       writeAudit(db, { actorType: "SYSTEM", action: "bus.route.failed", targetType: "BusRoute", targetId: route.id, result: "FAILURE", metadata: { eventId, reason: (error as { code?: string }).code ?? "BUS_TARGET_UNAVAILABLE" } });
       continue;
     }
-    writeAudit(db, { actorType: "SYSTEM", action: "bus.route.matched", targetType: "BusRoute", targetId: route.id, metadata: { eventId, dryRun } });
     if (dryRun) {
       routedCommands.push({ routeId: route.id, dryRun: true, targetServiceCode: route.targetServiceCode, actionName: route.actionName, status: "DRY_RUN" });
       continue;
