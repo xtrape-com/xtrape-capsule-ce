@@ -1,7 +1,7 @@
 import { App as AntApp, Badge, Button, Layout, Menu, Space, Tag, Typography } from "antd";
 import React from "react";
 import { Link, Navigate, Route, Routes, useLocation } from "react-router-dom";
-import { ApiError, logout, me, type SessionData } from "./api.js";
+import { ApiError, apiFetch, logout, me, type SessionData } from "./api.js";
 import { useI18n } from "./i18n.js";
 import { AgentsPage } from "./pages/AgentsPage.js";
 import { AuditEventsPage } from "./pages/AuditEventsPage.js";
@@ -30,6 +30,10 @@ export { formatRelativeTime, renderListCell, resolveRowPayload, resultRowKey } f
 function Shell({ session, onLogout }: { session: SessionData; onLogout: () => void }) {
   const { t } = useI18n();
   const location = useLocation();
+  const [ceVersion, setCeVersion] = React.useState<string>("");
+  React.useEffect(() => {
+    apiFetch<{ version: string }>("/api/system/version").then((r) => setCeVersion(r.version)).catch(() => {});
+  }, []);
   const menuEntries: Array<[string, string]> = [
     ["/", t("menu.dashboard")],
     ["/users", t("menu.users")],
@@ -46,9 +50,12 @@ function Shell({ session, onLogout }: { session: SessionData; onLogout: () => vo
   return (
     <Layout style={{ minHeight: "100vh" }}>
       <Layout.Sider width={240}>
-        <Typography.Title level={4} style={{ color: "white", padding: 16, margin: 0 }}>
-          Opstage CE
-        </Typography.Title>
+        <div style={{ padding: 16 }}>
+          <Typography.Title level={4} style={{ color: "white", margin: 0 }}>
+            Opstage CE
+          </Typography.Title>
+          {ceVersion && <Typography.Text style={{ color: "rgba(255,255,255,0.45)", fontSize: 12 }}>v{ceVersion}</Typography.Text>}
+        </div>
         <Menu theme="dark" mode="inline" selectedKeys={[selected]} items={menuItems} />
       </Layout.Sider>
       <Layout>
