@@ -3,7 +3,7 @@ import path from "node:path";
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import cookie from "@fastify/cookie";
 import { z } from "zod";
-import { adminLoginRequestSchema, agentHeartbeatRequestSchema, createActionCommandRequestSchema, createRegistrationTokenRequestSchema, createUserRequestSchema, reportedServiceSchema, reportCommandResultRequestSchema, resetUserPasswordRequestSchema, serviceReportRequestSchema, updateUserRequestSchema, type ReportedService } from "@xtrape/capsule-contracts-node";
+import { adminLoginRequestSchema, agentHeartbeatRequestSchema, createActionCommandRequestSchema, createBusRouteRuleRequestSchema, createRegistrationTokenRequestSchema, createUserRequestSchema, publishBusEventRequestSchema, reportedServiceSchema, reportCommandResultRequestSchema, resetUserPasswordRequestSchema, serviceReportRequestSchema, updateUserRequestSchema, type ReportedService } from "@xtrape/capsule-contracts-node";
 import { DEFAULT_WORKSPACE, ensureDefaultWorkspace, openDatabase, type Db } from "@xtrape/capsule-db";
 import { createId, hashToken, newToken, redactAuditMetadata, redactSecrets, safeJsonStringify } from "@xtrape/capsule-shared";
 import { type AppConfig, loadConfig } from "./config.js";
@@ -18,11 +18,12 @@ import { resolveStaticFile, staticContentType } from "./static-ui.js";
  * fallback only surfaces in dev / source runs. We intentionally suffix `-dev`
  * so the value is never mistaken for an actual release on a deployed box.
  */
-const BACKEND_FALLBACK_VERSION = "0.3.0-dev";
+const BACKEND_FALLBACK_VERSION = "0.4.0-dev";
 const BACKEND_EDITION: "ce" = "ce";
 
 // CE owns the HTTP registration boundary so it can accept an OpHub without a
 // service payload while still reusing reportedServiceSchema for embedded agents.
+
 const v03RegisterAgentRequestSchema = z.object({
   registrationToken: z.string().startsWith("opstage_reg_"),
   agent: z.object({
@@ -147,6 +148,38 @@ interface CommandResultRow {
   createdAt: string;
 }
 
+interface BusEventRow {
+  id: string;
+  workspaceId: string;
+  agentId: string;
+  serviceId: string | null;
+  serviceCode: string;
+  eventType: string;
+  payloadJson: string | null;
+  metadataJson: string | null;
+  correlationId: string | null;
+  causationId: string | null;
+  occurredAt: string;
+  acceptedAt: string;
+  routeCount: number;
+}
+
+interface BusRouteRow {
+  id: string;
+  workspaceId: string;
+  name: string;
+  description: string | null;
+  status: string;
+  sourceServiceCode: string | null;
+  eventType: string;
+  targetServiceCode: string;
+  actionName: string;
+  inputMappingJson: string | null;
+  metadataJson: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 
 interface AuditEventRow {
   id: string;
@@ -232,6 +265,15 @@ const auditEventQuerySchema = z.object({
   to: z.string().refine(value => Number.isFinite(Date.parse(value)), "to must be an ISO-8601 date-time").optional(),
   format: z.enum(["json", "csv"]).optional()
 });
+
+function assertCapsuleBusEnabled(config: AppConfig): void {
+  if (!config.OPSTAGE_CAPSULE_BUS_ENABLED) {
+    throw Object.assign(new Error("Capsule Bus is experimental and disabled. Set OPSTAGE_CAPSULE_BUS_ENABLED=true to enable controlled trials."), {
+      statusCode: 404,
+      code: "CAPSULE_BUS_DISABLED",
+    });
+  }
+}
 
 function validationError(message: string, issues: z.ZodIssue[]) {
   return Object.assign(new Error(message), {
@@ -561,6 +603,155 @@ function stashEphemeralCommandSecrets(commandId: string, data: unknown): void {
   }
 }
 
+
+function publicBusEvent(row: BusEventRow) {
+  return {
+    id: row.id,
+    agentId: row.agentId,
+    sourceServiceId: row.serviceId ?? undefined,
+    sourceServiceCode: row.serviceCode,
+    eventType: row.eventType,
+    payload: jsonParse(row.payloadJson),
+    metadata: jsonParse(row.metadataJson),
+    correlationId: row.correlationId ?? undefined,
+    causationId: row.causationId ?? undefined,
+    occurredAt: row.occurredAt,
+    acceptedAt: row.acceptedAt,
+    routeCount: row.routeCount,
+    experimental: "v0.4-experimental"
+  };
+}
+
+function publicBusRoute(row: BusRouteRow) {
+  return {
+    id: row.id,
+    name: row.name,
+    description: row.description ?? undefined,
+    status: row.status,
+    match: { eventType: row.eventType, sourceServiceCode: row.sourceServiceCode ?? undefined },
+    target: { serviceCode: row.targetServiceCode, actionName: row.actionName },
+    inputMapping: jsonParse(row.inputMappingJson),
+    metadata: jsonParse(row.metadataJson),
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+    experimental: "v0.4-experimental"
+  };
+}
+
+function busCommandPayload(event: Record<string, unknown>, route: BusRouteRow): Record<string, unknown> {
+  const mapping = jsonParse(route.inputMappingJson);
+  if (Object.keys(mapping).length === 0) {
+    return { busEvent: event, payload: event.payload ?? {} };
+  }
+  return { busEvent: event, mapping, payload: event.payload ?? {} };
+}
+
+function dispatchBusEvent(db: Db, config: AppConfig, input: { agent: AgentRow; body: z.infer<typeof publishBusEventRequestSchema> }) {
+  const ts = now();
+  const service = db.prepare("select * from capsule_services where workspaceId = ? and code = ?").get(DEFAULT_WORKSPACE.id, input.body.sourceServiceCode) as CapsuleServiceRow | undefined;
+  if (!service) {
+    throw Object.assign(new Error("Bus event source service was not found."), { statusCode: 404, code: "BUS_SOURCE_SERVICE_NOT_FOUND" });
+  }
+  if (service.agentId !== input.agent.id) {
+    throw Object.assign(new Error("Bus event source service is not owned by this agent."), { statusCode: 403, code: "BUS_SOURCE_SERVICE_FORBIDDEN" });
+  }
+
+  const oneMinuteAgo = new Date(Date.now() - 60_000).toISOString();
+  const recentCount = (db.prepare("select count(*) as count from bus_events where agentId = ? and acceptedAt > ?").get(input.agent.id, oneMinuteAgo) as { count: number }).count;
+  if (recentCount >= config.OPSTAGE_CAPSULE_BUS_INGEST_PER_MIN) {
+    throw Object.assign(new Error(`Bus rate limit exceeded: ${config.OPSTAGE_CAPSULE_BUS_INGEST_PER_MIN} events/min per agent.`), { statusCode: 429, code: "BUS_RATE_LIMITED" });
+  }
+
+  if (input.body.causationId) {
+    const causationEvent = db.prepare("select causationId from bus_events where id = ? and workspaceId = ?").get(input.body.causationId, DEFAULT_WORKSPACE.id) as { causationId: string | null } | undefined;
+    if (causationEvent?.causationId) {
+      throw Object.assign(new Error("Bus event depth exceeded: max depth is 1. Router-caused re-entry is not allowed."), { statusCode: 422, code: "BUS_DEPTH_EXCEEDED" });
+    }
+  }
+
+  const eventId = createId("bev");
+  const occurredAt = input.body.occurredAt ?? ts;
+  const payload = redactSecrets(input.body.payload ?? {});
+  const metadata = redactSecrets(input.body.metadata ?? {});
+  db.prepare(`
+    insert into bus_events (
+      id, workspaceId, agentId, serviceId, serviceCode, eventType, payloadJson, metadataJson,
+      correlationId, causationId, occurredAt, acceptedAt, routeCount
+    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+  `).run(
+    eventId, DEFAULT_WORKSPACE.id, input.agent.id, service.id, input.body.sourceServiceCode, input.body.eventType,
+    safeJsonStringify(payload), safeJsonStringify(metadata),
+    input.body.correlationId ?? null, input.body.causationId ?? null, occurredAt, ts
+  );
+
+  writeAudit(db, {
+    actorType: "AGENT",
+    actorId: input.agent.id,
+    action: "bus.event.received",
+    targetType: "BusEvent",
+    targetId: eventId,
+    metadata: { eventType: input.body.eventType, sourceServiceCode: input.body.sourceServiceCode }
+  });
+
+  const routes = db.prepare(`
+    select * from bus_routes
+    where workspaceId = ? and eventType = ? and status in ('ENABLED', 'DRY_RUN')
+      and (sourceServiceCode is null or sourceServiceCode = ?)
+    order by createdAt asc
+    limit 10
+  `).all(DEFAULT_WORKSPACE.id, input.body.eventType, input.body.sourceServiceCode) as BusRouteRow[];
+
+  const eventRecord = {
+    id: eventId,
+    experimental: "v0.4-experimental",
+    eventType: input.body.eventType,
+    sourceServiceCode: input.body.sourceServiceCode,
+    sourceServiceId: service.id,
+    occurredAt,
+    correlationId: input.body.correlationId,
+    causationId: input.body.causationId,
+    payload,
+    metadata
+  } as Record<string, unknown>;
+  const routedCommands = [];
+  for (const route of routes) {
+    const dryRun = route.status === "DRY_RUN" || input.body.routePolicy?.dryRun === true;
+    writeAudit(db, { actorType: "SYSTEM", action: "bus.route.matched", targetType: "BusRoute", targetId: route.id, metadata: { eventId, dryRun } });
+    const target = db.prepare("select * from capsule_services where workspaceId = ? and code = ?").get(DEFAULT_WORKSPACE.id, route.targetServiceCode) as CapsuleServiceRow | undefined;
+    const action = target ? db.prepare("select * from action_definitions where serviceId = ? and name = ? and enabled = 1").get(target.id, route.actionName) as ActionDefinitionRow | undefined : undefined;
+    if (!target || !action) {
+      routedCommands.push({ routeId: route.id, dryRun, targetServiceCode: route.targetServiceCode, actionName: route.actionName, status: "FAILED", errorCode: "BUS_TARGET_NOT_FOUND", errorMessage: "Target service/action was not found." });
+      writeAudit(db, { actorType: "SYSTEM", action: "bus.route.failed", targetType: "BusRoute", targetId: route.id, result: "FAILURE", metadata: { eventId, reason: "BUS_TARGET_NOT_FOUND" } });
+      continue;
+    }
+    try {
+      assertAgentCanHandleAction(db, config, target);
+    } catch (error) {
+      routedCommands.push({ routeId: route.id, dryRun, targetServiceCode: route.targetServiceCode, actionName: route.actionName, status: "FAILED", errorCode: (error as { code?: string }).code ?? "BUS_TARGET_UNAVAILABLE", errorMessage: error instanceof Error ? error.message : String(error) });
+      writeAudit(db, { actorType: "SYSTEM", action: "bus.route.failed", targetType: "BusRoute", targetId: route.id, result: "FAILURE", metadata: { eventId, reason: (error as { code?: string }).code ?? "BUS_TARGET_UNAVAILABLE" } });
+      continue;
+    }
+    if (dryRun) {
+      routedCommands.push({ routeId: route.id, dryRun: true, targetServiceCode: route.targetServiceCode, actionName: route.actionName, status: "DRY_RUN" });
+      continue;
+    }
+    const commandId = createId("cmd");
+    const expiresAt = action.timeoutSeconds ? new Date(Date.now() + action.timeoutSeconds * 1000).toISOString() : null;
+    db.prepare(`
+      insert into commands (
+        id, workspaceId, agentId, serviceId, type, actionName, status, payloadJson,
+        createdByUserId, createdAt, updatedAt, expiresAt
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(commandId, DEFAULT_WORKSPACE.id, target.agentId, target.id, "ACTION_EXECUTE", action.name, "PENDING", safeJsonStringify(busCommandPayload(eventRecord, route)), null, ts, ts, expiresAt);
+    routedCommands.push({ routeId: route.id, commandId, dryRun: false, targetServiceCode: route.targetServiceCode, actionName: route.actionName, status: "CREATED" });
+    writeAudit(db, { actorType: "SYSTEM", action: "bus.command.created", targetType: "Command", targetId: commandId, metadata: { eventId, routeId: route.id, targetServiceCode: route.targetServiceCode, actionName: route.actionName } });
+  }
+  db.prepare("update bus_events set routeCount = ? where id = ?").run(routedCommands.length, eventId);
+  if (routedCommands.length === 0) {
+    writeAudit(db, { actorType: "SYSTEM", action: "bus.route.unmatched", targetType: "BusEvent", targetId: eventId, metadata: { eventType: input.body.eventType, sourceServiceCode: input.body.sourceServiceCode } });
+  }
+  return { eventId, experimental: "v0.4-experimental", routedCommands };
+}
 
 function publicAuditEvent(row: AuditEventRow) {
   return {
@@ -992,7 +1183,8 @@ function runtimeDiagnostics(db: Db, config: AppConfig) {
       databaseUrl: config.DATABASE_URL.replace(/([^:]{3})[^/]*@/, "$1***@"),
       staticDir: config.OPSTAGE_STATIC_DIR,
       backupDir: config.OPSTAGE_BACKUP_DIR,
-      maintenance: getMaintenanceSettings(db, config)
+      maintenance: getMaintenanceSettings(db, config),
+      capsuleBusEnabled: config.OPSTAGE_CAPSULE_BUS_ENABLED
     }
   };
 }
@@ -1626,6 +1818,110 @@ export async function buildApp(options: BuildAppOptions = {}) {
         actions: actions.map(publicActionDefinition)
       }
     };
+  });
+
+  app.get("/api/admin/bus/events", async (req) => {
+    getSessionUser(req, db, config);
+    assertCapsuleBusEnabled(config);
+    const { page, pageSize, offset } = getPagination(req.query);
+    const rows = db.prepare("select * from bus_events where workspaceId = ? order by acceptedAt desc limit ? offset ?").all(DEFAULT_WORKSPACE.id, pageSize, offset) as BusEventRow[];
+    const total = db.prepare("select count(*) as count from bus_events where workspaceId = ?").get(DEFAULT_WORKSPACE.id) as { count: number };
+    return { success: true, data: rows.map(publicBusEvent), pagination: { page, pageSize, total: total.count }, experimental: "v0.4-experimental" };
+  });
+
+  app.get("/api/admin/bus/audit", async (req) => {
+    getSessionUser(req, db, config);
+    assertCapsuleBusEnabled(config);
+    const { page, pageSize, offset } = getPagination(req.query);
+    const rows = db.prepare(`
+      select * from audit_events
+      where workspaceId = ? and action like 'bus.%'
+      order by createdAt desc limit ? offset ?
+    `).all(DEFAULT_WORKSPACE.id, pageSize, offset) as AuditEventRow[];
+    const total = db.prepare("select count(*) as count from audit_events where workspaceId = ? and action like 'bus.%'").get(DEFAULT_WORKSPACE.id) as { count: number };
+    return { success: true, data: rows.map(publicAuditEvent), pagination: { page, pageSize, total: total.count }, experimental: "v0.4-experimental" };
+  });
+
+  app.get("/api/admin/bus/routes", async (req) => {
+    getSessionUser(req, db, config);
+    assertCapsuleBusEnabled(config);
+    const rows = db.prepare("select * from bus_routes where workspaceId = ? order by createdAt desc").all(DEFAULT_WORKSPACE.id) as BusRouteRow[];
+    return { success: true, data: rows.map(publicBusRoute), experimental: "v0.4-experimental" };
+  });
+
+  app.get("/api/admin/bus/routes/:routeId", async (req) => {
+    getSessionUser(req, db, config);
+    assertCapsuleBusEnabled(config);
+    const routeId = (req.params as { routeId: string }).routeId;
+    const row = db.prepare("select * from bus_routes where id = ? and workspaceId = ?").get(routeId, DEFAULT_WORKSPACE.id) as BusRouteRow | undefined;
+    if (!row) throw Object.assign(new Error("Bus route not found."), { statusCode: 404, code: "BUS_ROUTE_NOT_FOUND" });
+    return { success: true, data: publicBusRoute(row) };
+  });
+
+  app.put("/api/admin/bus/routes/:routeId", async (req) => {
+    const { user } = getSessionUser(req, db, config);
+    requireOperator(user);
+    assertCapsuleBusEnabled(config);
+    const routeId = (req.params as { routeId: string }).routeId;
+    const body = createBusRouteRuleRequestSchema.parse(req.body ?? {});
+    const existing = db.prepare("select * from bus_routes where id = ? and workspaceId = ?").get(routeId, DEFAULT_WORKSPACE.id) as BusRouteRow | undefined;
+    if (!existing) throw Object.assign(new Error("Bus route not found."), { statusCode: 404, code: "BUS_ROUTE_NOT_FOUND" });
+    const ts = now();
+    db.prepare(`
+      update bus_routes set
+        name = ?, description = ?, status = ?, sourceServiceCode = ?, eventType = ?,
+        targetServiceCode = ?, actionName = ?, inputMappingJson = ?,
+        metadataJson = ?, updatedAt = ?
+      where id = ? and workspaceId = ?
+    `).run(
+      body.name, body.description ?? null, body.status, body.match.sourceServiceCode ?? null, body.match.eventType,
+      body.target.serviceCode, body.target.actionName, safeJsonStringify(body.inputMapping ?? {}),
+      safeJsonStringify(body.metadata ?? {}), ts, routeId, DEFAULT_WORKSPACE.id
+    );
+    const row = db.prepare("select * from bus_routes where id = ?").get(routeId) as BusRouteRow;
+    writeAudit(db, { actorType: "USER", actorId: user.id, action: "bus.route.updated", targetType: "BusRoute", targetId: routeId, metadata: { status: body.status, eventType: body.match.eventType, targetServiceCode: body.target.serviceCode, actionName: body.target.actionName } });
+    return { success: true, data: publicBusRoute(row) };
+  });
+
+  app.delete("/api/admin/bus/routes/:routeId", async (req) => {
+    const { user } = getSessionUser(req, db, config);
+    requireOperator(user);
+    assertCapsuleBusEnabled(config);
+    const routeId = (req.params as { routeId: string }).routeId;
+    const existing = db.prepare("select * from bus_routes where id = ? and workspaceId = ?").get(routeId, DEFAULT_WORKSPACE.id) as BusRouteRow | undefined;
+    if (!existing) throw Object.assign(new Error("Bus route not found."), { statusCode: 404, code: "BUS_ROUTE_NOT_FOUND" });
+    db.prepare("delete from bus_routes where id = ? and workspaceId = ?").run(routeId, DEFAULT_WORKSPACE.id);
+    writeAudit(db, { actorType: "USER", actorId: user.id, action: "bus.route.deleted", targetType: "BusRoute", targetId: routeId, metadata: { name: existing.name, eventType: existing.eventType } });
+    return { success: true, data: publicBusRoute(existing) };
+  });
+
+  app.post("/api/admin/bus/routes", async (req) => {
+    const { user } = getSessionUser(req, db, config);
+    requireOperator(user);
+    assertCapsuleBusEnabled(config);
+    const body = createBusRouteRuleRequestSchema.parse(req.body ?? {});
+    const ts = now();
+    const routeId = createId("brt");
+    db.prepare(`
+      insert into bus_routes (
+        id, workspaceId, name, description, status, sourceServiceCode, eventType, targetServiceCode,
+        actionName, inputMappingJson, metadataJson, createdAt, updatedAt
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      routeId, DEFAULT_WORKSPACE.id, body.name, body.description ?? null, body.status, body.match.sourceServiceCode ?? null, body.match.eventType,
+      body.target.serviceCode, body.target.actionName, safeJsonStringify(body.inputMapping ?? {}), safeJsonStringify(body.metadata ?? {}), ts, ts
+    );
+    const row = db.prepare("select * from bus_routes where id = ?").get(routeId) as BusRouteRow;
+    writeAudit(db, { actorType: "USER", actorId: user.id, action: "bus.route.created", targetType: "BusRoute", targetId: routeId, metadata: { eventType: body.match.eventType, targetServiceCode: body.target.serviceCode, actionName: body.target.actionName, status: body.status } });
+    return { success: true, data: publicBusRoute(row) };
+  });
+
+  app.post("/api/agents/:agentId/bus/events", async (req) => {
+    const agentId = (req.params as { agentId: string }).agentId;
+    const agent = authenticateAgent(req, db, agentId);
+    assertCapsuleBusEnabled(config);
+    const body = publishBusEventRequestSchema.parse(req.body ?? {});
+    return { success: true, data: dispatchBusEvent(db, config, { agent, body }) };
   });
 
   app.post("/api/agents/register", async (req) => {

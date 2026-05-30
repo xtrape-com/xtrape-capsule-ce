@@ -1,6 +1,6 @@
 {
   "name": "xtrape-capsule-ce",
-  "version": "0.3.0",
+  "version": "0.4.0-rc.0",
   "description": "Xtrape Capsule Community Edition monorepo",
   "private": true,
   "workspaces": [
@@ -9,17 +9,14 @@
   ],
   "scripts": {
     "build:packages": "pnpm --filter @xtrape/capsule-shared build && pnpm --filter @xtrape/capsule-db build && pnpm --filter @xtrape/capsule-test-utils build",
-    "build": "pnpm build:packages && pnpm --filter opstage-backend build && pnpm --filter demo-capsule-service build",
+    "build": "pnpm build:packages && pnpm --filter opstage-backend build && pnpm --filter @xtrape/opstage-ui build && pnpm --filter demo-capsule-service build",
     "dev": "pnpm --filter opstage-backend dev",
-    "typecheck": "pnpm --filter opstage-backend typecheck && pnpm --filter demo-capsule-service typecheck",
+    "typecheck": "pnpm --filter opstage-backend typecheck && pnpm --filter @xtrape/opstage-ui typecheck && pnpm --filter demo-capsule-service typecheck",
     "test": "pnpm build:packages && pnpm --filter opstage-backend test",
     "db:generate": "pnpm --filter @xtrape/capsule-db db:generate",
     "db:migrate": "pnpm --filter opstage-backend db:migrate",
     "db:studio": "pnpm --filter opstage-backend db:studio",
     "db:validate": "pnpm --filter @xtrape/capsule-db db:validate"
-  },
-  "dependencies": {
-    "@xtrape/capsule-agent-node": "^0.3.0"
   },
   "devDependencies": {
     "tsx": "^4.19.2",

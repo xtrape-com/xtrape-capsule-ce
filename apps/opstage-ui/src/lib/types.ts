@@ -230,3 +230,33 @@ export interface PageState {
 }
 
 export const defaultPage: PageState = { page: 1, pageSize: 20 };
+
+
+export interface BusRoute {
+  id: string;
+  name: string;
+  description?: string | null;
+  status: string;
+  match: { eventType: string; sourceServiceCode?: string };
+  target: { serviceCode: string; actionName: string };
+  inputMapping?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface BusEvent {
+  id: string;
+  agentId: string;
+  sourceServiceId?: string;
+  sourceServiceCode: string;
+  eventType: string;
+  payload?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+  correlationId?: string;
+  causationId?: string;
+  occurredAt: string;
+  acceptedAt: string;
+  routeCount: number;
+  experimental: string;
+}
